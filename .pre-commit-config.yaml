@@ -1,0 +1,39 @@
+default_install_hook_types:
+  - pre-commit
+  - commit-msg
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: 3e8a8703264a2f4a69428a0aa4dcb512790b2c8c  # frozen: v6.0.0
+    hooks:
+      - id: check-added-large-files
+      - id: check-json
+      - id: check-yaml
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+        args: [ --markdown-linebreak-ext=md ]
+  - repo: https://github.com/golangci/golangci-lint
+    rev: 8f3b0c7ed018e57905fbd873c697e0b1ede605a5  # frozen: v2.11.4
+    hooks:
+      - id: golangci-lint-full
+  - repo: local
+    hooks:
+      - id: go-test
+        name: go test
+        entry: go test ./... -race -coverprofile=coverage.out
+        language: system
+        pass_filenames: false
+        types: [go]
+        stages: [pre-commit]
+      - id: go-test-coverage
+        name: go test coverage check (cmd package)
+        entry: bash -c 'go test -coverprofile=coverage.out ./... > /dev/null 2>&1 && COVERAGE=$(go tool cover -func=coverage.out | grep "^total:" | awk "{print \$3}" | sed "s/%//"); if (( $(echo "$COVERAGE < 80" | bc -l) )); then echo "Coverage below 80% ${COVERAGE}%"; exit 1; else echo "Coverage OK ${COVERAGE}%"; fi'
+        language: system
+        pass_filenames: false
+        types: [go]
+        stages: [pre-commit]
+  - repo: https://github.com/commitizen-tools/commitizen
+    rev: 4fbeae7861663ecf4b4989211eba41c1a3fb1227  # frozen: v4.13.9
+    hooks:
+      - id: commitizen
+        stages:
+          - commit-msg
