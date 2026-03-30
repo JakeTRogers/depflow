@@ -24,7 +24,7 @@ depflow is a Go 1.25 CLI tool for discovering open Dependabot pull requests, pla
 	- `plan.go` — `Plan` and `PlannedPR` types, `Build()` sorts PRs into buckets (ci → developer-tooling → patch → minor → grouped → unknown → infra-sensitive → major) with tie-breaking by change kind rank, ecosystem, dependency name, title, PR number
 
 - `internal/executor/` — Sequential PR processing loop
-	- `executor.go` — `Operator` interface (ViewPullRequest, MergePullRequest, CommentOnPR, ListWorkflowRuns, CompareBranches), `Progress` interface (SetStatus, Increment), `Config`, `PRResult`, `Result` types, `Run()` orchestration function
+	- `executor.go` — `Operator` interface (ViewPullRequest, ApprovePullRequest, MergePullRequest, CommentOnPR, ListWorkflowRuns, CompareBranches), `Progress` interface (SetStatus, Increment), `Config`, `PRResult`, `Result` types, `Run()` orchestration function
 	- `wait.go` — `waitForChecks()`, `waitForPostMergeCI()` (correlates runs by merge commit SHA and exits early on terminal failures), `waitForBranchUpdate()` polling helpers
 	- `errors.go` — Sentinel errors: `ErrExecutionFailed`, `ErrCheckFailed`, `ErrCheckTimeout`, `ErrBranchUpdateTimeout`, `ErrMergeConflict`, `ErrPostMergeTimeout`
 
@@ -32,6 +32,7 @@ depflow is a Go 1.25 CLI tool for discovering open Dependabot pull requests, pla
 	- `client.go` — package-private `client` type returned by `NewClient()`, `ghExecutor` wraps `exec.CommandContext` with `GH_PAGER=""` env var, resolves the `gh` binary to an absolute path once, provides `runJSON()` and `ResolveRepo()`, and truncates stderr in command errors
 	- `pulls.go` — `ListOpenPullRequests()`, `PullRequest` type
 	- `pr_detail.go` — `ViewPullRequest()`, `PRDetail`, `MergeCommit`, and `StatusCheck` types; `PRDetail.MergeCommit.OID` carries the merge commit SHA used after merge
+	- `approve.go` — `ApprovePullRequest()` via `gh pr review --approve`
 	- `merge.go` — `MergePullRequest()` (merge commit + delete branch)
 	- `comment.go` — `CommentOnPR()` (used for `@dependabot rebase`)
 	- `compare.go` — `CompareBranches()` via GitHub API with URL-escaped refs, `BranchComparison` type
@@ -47,7 +48,7 @@ depflow is a Go 1.25 CLI tool for discovering open Dependabot pull requests, pla
 - `dependabot.PR` — Normalized Dependabot PR with `Classification`
 - `dependabot.Classification` — Ecosystem, change kind, grouping, dev-tooling, infra-sensitive signals
 - `planner.Plan` / `planner.PlannedPR` — Ordered processing plan with bucket and reason
-- `executor.Operator` — Interface for all GitHub operations (satisfied by the package-private GitHub CLI client returned by `githubcli.NewClient()`)
+- `executor.Operator` — Interface for all GitHub operations including pre-merge approval (satisfied by the package-private GitHub CLI client returned by `githubcli.NewClient()`)
 - `executor.Progress` — Interface for progress updates (satisfied by the package-private tracker returned by `progress.NewTracker()`)
 - `executor.Config` — Polling intervals and timeouts
 - `executor.Result` / `executor.PRResult` — Execution outcomes
@@ -60,7 +61,7 @@ depflow is a Go 1.25 CLI tool for discovering open Dependabot pull requests, pla
 
 - `depflow scan` — read-only, lists open Dependabot PRs with classification
 - `depflow plan` — read-only, shows deterministic processing order
-- `depflow execute` — mutating, processes PRs sequentially with signal-aware shutdown (rebase → CI wait → merge → post-merge CI wait correlated by merge commit SHA)
+- `depflow execute` — mutating, processes PRs sequentially with signal-aware shutdown (rebase → CI wait → approve → merge → post-merge CI wait correlated by merge commit SHA)
 - `depflow version` — prints version and platform
 
 ## Code Patterns
@@ -77,11 +78,15 @@ depflow is a Go 1.25 CLI tool for discovering open Dependabot pull requests, pla
 
 **GitHub transport:** All GitHub operations go through the `gh` CLI via `exec.CommandContext`. `githubcli.NewClient()` resolves `gh` once up front, JSON responses are decoded with `client.runJSON()`, and non-JSON commands use the client's executor directly.
 
+**Live `gh` usage:** Before any manual or live `gh` commands in this repo/session, run `gh config set pager cat` to disable paging and avoid interactive hangs. depflow's internal `gh` wrapper already sets `GH_PAGER=""` for its own executions, so this requirement is for shell-level `gh` usage outside the runtime wrapper.
+
 **Execute validation:** Keep execute flag validation in `cmd/execute.go`. All duration flags must be `> 0`, `--poll-interval` must be at least 5 seconds, and `--check-timeout` / `--post-merge-timeout` must be greater than `--poll-interval`.
 
 **Rebase strategy:** For PRs behind base, depflow posts a `@dependabot rebase` comment and polls `CompareBranches` until the branch is up to date (replaced the unreliable GitHub `update-branch` API).
 
-**Execute flow:** Sequential processing with stop-on-first-failure semantics. After a successful merge, depflow re-reads the PR to obtain `MergeCommit.OID`, waits for post-merge CI by matching workflow `HeadSHA`, and converts non-context post-merge failures into recorded failed `PRResult` entries returned through `ErrExecutionFailed`. No retry or skip mode.
+**Approval step:** Immediately before merge, depflow submits an unconditional approval review with `gh pr review --approve`. Runtime execution therefore requires an authenticated actor that can both review and merge the target pull request.
+
+**Execute flow:** Sequential processing with stop-on-first-failure semantics. After CI and final mergeability/branch-freshness checks, depflow approves the PR, merges it, re-reads the PR to obtain `MergeCommit.OID`, waits for post-merge CI by matching workflow `HeadSHA`, and converts non-context post-merge failures into recorded failed `PRResult` entries returned through `ErrExecutionFailed`. No retry or skip mode.
 
 ## Development Commands
 
