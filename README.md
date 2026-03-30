@@ -4,17 +4,23 @@ depflow is a Go CLI tool for discovering open Dependabot pull requests, planning
 
 ## Commands
 
+By default, `plan` and `execute` exclude major version updates; pass `--include-major` or `-M` to include them.
+
 ### scan
 
-Lists open Dependabot pull requests with metadata including classification signals: ecosystem, change kind, grouping, developer tooling, and infrastructure sensitivity.
+Lists open Dependabot pull requests with metadata including classification signals: ecosystem, change kind, grouping, developer tooling, and infrastructure sensitivity. `scan` is unchanged by major filtering and still shows major updates.
 
 ### plan
 
-Shows deterministic classification and the preferred processing order. PRs are sorted into buckets — ci, developer-tooling, patch, minor, grouped, unknown, infra-sensitive, major — so that lower-risk updates are processed first.
+Shows deterministic classification and the preferred processing order. By default, `plan` excludes major version Dependabot PRs from the planned queue and lists them separately under `Excluded major updates`; use `--include-major` or `-M` to include them again. Grouped summary PRs are also treated as major when their PR body contains a major version bump. Included PRs are sorted into buckets — ci, developer-tooling, patch, minor, grouped, unknown, infra-sensitive, major — so that lower-risk updates are processed first.
+
+#### Plan Flags
+
+- `-M, --include-major` — include major version updates in the planned order
 
 ### execute
 
-Processes Dependabot PRs in planned order with a live progress display. For each PR the command:
+Processes Dependabot PRs in planned order with a live progress display. By default, `execute` excludes major version updates, reports them before execution, and only processes the remaining queue; use `--include-major` or `-M` to include them again. If every discovered PR is excluded, the command exits without mutating anything and prints `Nothing to do after excluding major updates.`. For each included PR the command:
 
 - Inspects PR state and branch comparison
 - Posts a `@dependabot rebase` comment and polls until the branch is updated if it is behind base
@@ -31,6 +37,7 @@ If the process receives `SIGINT` or `SIGTERM`, depflow cancels the active execut
 #### Execute Flags
 
 - `--dry-run` — show planned order without executing
+- `-M, --include-major` — include major version updates in execution
 - `--poll-interval` — CI status polling interval (default: 30s, minimum: 5s)
 - `--check-timeout` — maximum wait for CI checks per PR (default: 30m, must be greater than `--poll-interval`)
 - `--post-merge-delay` — delay before checking post-merge CI (default: 10s)
@@ -55,7 +62,8 @@ depflow 0.1.0 (linux/amd64)
 ## Output Conventions
 
 - GitHub-derived strings printed by `scan`, `plan`, execute dry-run output, execution summaries, and top-level error output are sanitized to strip terminal control bytes before being written to the terminal.
-- `scan`, `plan`, and `execute` print `No open Dependabot pull requests found.` when no Dependabot PRs remain after filtering.
+- `scan`, `plan`, and `execute` print `No open Dependabot pull requests found.` when no Dependabot PRs are discovered.
+- With default major filtering enabled, `plan` lists excluded major PRs separately and `execute` prints `Nothing to do after excluding major updates.` when no eligible PRs remain.
 - When repository inference fails and `--repo` was omitted, depflow includes a rerun hint using `--repo OWNER/REPO`.
 
 ## Prerequisites
@@ -78,7 +86,9 @@ depflow 0.1.0 (linux/amd64)
 depflow scan
 depflow --repo owner/repo --limit 25 scan
 depflow --repo owner/repo plan
+depflow --repo owner/repo plan -M
 depflow --repo owner/repo execute --dry-run
+depflow --repo owner/repo execute --dry-run -M
 depflow -v --repo owner/repo execute
 depflow -vv --repo owner/repo execute --poll-interval 15s --check-timeout 10m
 depflow version
