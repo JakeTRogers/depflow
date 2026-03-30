@@ -1,0 +1,21 @@
+name: Linter
+on:
+  workflow_dispatch:
+  push:
+    branches-ignore:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  golangci:
+    if: github.actor != 'dependabot[bot]'
+    name: Linting Go code
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd               # v6.0.2
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@1e7e51e771db61008b38414a730f564565cf7c20  # v9.2.0
+        with:
+          version: 8f3b0c7ed018e57905fbd873c697e0b1ede605a5  # v2.11.4
