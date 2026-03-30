@@ -20,6 +20,7 @@ Processes Dependabot PRs in planned order with a live progress display. For each
 - Posts a `@dependabot rebase` comment and polls until the branch is updated if it is behind base
 - Waits for CI checks to pass by polling the status check rollup
 - Re-checks mergeability and branch state before merge
+- Submits an approval review immediately before merge
 - Merges the PR using a merge commit strategy and deletes the head branch
 - Waits for post-merge CI for the merged commit on the base branch before proceeding to the next PR
 - Stops on first failure (no retry or skip mode) and exits non-zero if any PR fails to process
@@ -60,7 +61,7 @@ depflow 0.1.0 (linux/amd64)
 ## Prerequisites
 
 - Go 1.25+
-- [GitHub CLI](https://cli.github.com/) (`gh`) installed and authenticated with `repo` and `workflow` scopes
+- [GitHub CLI](https://cli.github.com/) (`gh`) installed and authenticated with permission to review and merge pull requests; fine-grained tokens need pull-request write access in addition to workflow visibility
 
 `scan`, `plan`, and `execute` all use `gh` as the GitHub transport.
 
@@ -103,8 +104,8 @@ depflow completion fish | source
 - `cmd/` — Cobra command wiring (root, scan, plan, execute, version, discovery helpers)
 - `internal/dependabot/` — PR normalization (classify ecosystem, change kind, grouping, dev-tooling, infra-sensitive signals)
 - `internal/planner/` — Deterministic bucket-based ordering with tie-breaking by change kind, ecosystem, dependency name, title, and PR number
-- `internal/executor/` — Sequential PR processing loop with Operator interface (dependency injection), polling helpers for CI checks, branch updates, and post-merge CI
-- `internal/githubcli/` — Thin `gh` CLI wrapper: list PRs, view PR details, merge, comment, compare branches, list workflow runs
+- `internal/executor/` — Sequential PR processing loop with Operator interface (dependency injection), approval before merge, and polling helpers for CI checks, branch updates, and post-merge CI
+- `internal/githubcli/` — Thin `gh` CLI wrapper: list PRs, view PR details, approve, merge, comment, compare branches, list workflow runs
 - `internal/progress/` — mpb-based live progress tracker with verbosity-controlled slog logger
 - `main.go` — Entry point
 
