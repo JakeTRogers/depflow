@@ -29,11 +29,14 @@ type fakeOperator struct {
 	mu             sync.Mutex
 	viewResults    map[int][]githubcli.PRDetail
 	viewErrors     map[int]error
+	approveErrors  map[int]error
 	mergeErrors    map[int]error
 	commentErrors  map[int]error
 	runResults     map[string][][]githubcli.WorkflowRun
+	approveCalls   []int
 	mergeCalls     []int
 	commentCalls   []commentCall
+	callSequence   []string
 	compareResults []githubcli.BranchComparison
 	compareCalls   int
 }
@@ -60,8 +63,21 @@ func (f *fakeOperator) MergePullRequest(_ context.Context, _ string, number int)
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
+	f.callSequence = append(f.callSequence, fmt.Sprintf("merge:%d", number))
 	f.mergeCalls = append(f.mergeCalls, number)
 	if err, ok := f.mergeErrors[number]; ok {
+		return err
+	}
+	return nil
+}
+
+func (f *fakeOperator) ApprovePullRequest(_ context.Context, _ string, number int) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.callSequence = append(f.callSequence, fmt.Sprintf("approve:%d", number))
+	f.approveCalls = append(f.approveCalls, number)
+	if err, ok := f.approveErrors[number]; ok {
 		return err
 	}
 	return nil
@@ -137,8 +153,10 @@ func TestRun(t *testing.T) {
 		wantErr          bool
 		wantErrIs        []error
 		wantFailedErrIs  []error
+		wantApproveCalls []int
 		wantMergeCalls   []int
 		wantCommentCalls []commentCall
+		wantCallSequence []string
 	}{
 		{
 			name: "happy path merges all PRs",
@@ -181,8 +199,10 @@ func TestRun(t *testing.T) {
 				viewErrors:    map[int]error{},
 			},
 			wantMerged:       2,
+			wantApproveCalls: []int{1, 2},
 			wantMergeCalls:   []int{1, 2},
 			wantCommentCalls: []commentCall{{Number: 2, Body: "@dependabot rebase"}},
+			wantCallSequence: []string{"approve:1", "merge:1", "approve:2", "merge:2"},
 		},
 		{
 			name: "PR already closed is skipped",
@@ -211,9 +231,11 @@ func TestRun(t *testing.T) {
 				commentErrors: map[int]error{},
 				viewErrors:    map[int]error{},
 			},
-			wantMerged:     1,
-			wantSkipped:    1,
-			wantMergeCalls: []int{2},
+			wantMerged:       1,
+			wantSkipped:      1,
+			wantApproveCalls: []int{2},
+			wantMergeCalls:   []int{2},
+			wantCallSequence: []string{"approve:2", "merge:2"},
 		},
 		{
 			name: "branch behind triggers rebase comment",
@@ -241,8 +263,10 @@ func TestRun(t *testing.T) {
 				viewErrors:    map[int]error{},
 			},
 			wantMerged:       1,
+			wantApproveCalls: []int{1},
 			wantMergeCalls:   []int{1},
 			wantCommentCalls: []commentCall{{Number: 1, Body: "@dependabot rebase"}},
+			wantCallSequence: []string{"approve:1", "merge:1"},
 		},
 		{
 			name: "rebase comment failure stops execution",
@@ -265,6 +289,36 @@ func TestRun(t *testing.T) {
 			},
 			wantFailed: true,
 			wantErr:    true,
+		},
+		{
+			name: "approval failure stops execution before merge",
+			plan: newTestPlan(
+				dependabot.PR{Number: 1, Title: "bump foo", BaseRef: "main"},
+			),
+			op: &fakeOperator{
+				viewResults: map[int][]githubcli.PRDetail{
+					1: {
+						{Number: 1, State: "OPEN", Mergeable: "MERGEABLE", HeadRefName: "feature-1", BaseRefName: "main",
+							StatusCheckRollup: []githubcli.StatusCheck{{Name: "ci", Conclusion: "success"}}},
+						{Number: 1, State: "OPEN", StatusCheckRollup: []githubcli.StatusCheck{{Name: "ci", Conclusion: "success"}}},
+						{Number: 1, State: "OPEN", Mergeable: "MERGEABLE", HeadRefName: "feature-1", BaseRefName: "main"},
+					},
+				},
+				compareResults: []githubcli.BranchComparison{
+					{BehindBy: 0},
+					{BehindBy: 0},
+				},
+				runResults:    map[string][][]githubcli.WorkflowRun{},
+				approveErrors: map[int]error{1: fmt.Errorf("review denied")},
+				mergeErrors:   map[int]error{},
+				commentErrors: map[int]error{},
+				viewErrors:    map[int]error{},
+			},
+			wantFailed:       true,
+			wantErr:          true,
+			wantApproveCalls: []int{1},
+			wantMergeCalls:   []int{},
+			wantCallSequence: []string{"approve:1"},
 		},
 		{
 			name: "CI check failure stops execution",
@@ -421,6 +475,17 @@ func TestRun(t *testing.T) {
 				}
 			}
 
+			if tc.wantApproveCalls != nil {
+				if len(tc.op.approveCalls) != len(tc.wantApproveCalls) {
+					t.Errorf("approve calls: got %v, want %v", tc.op.approveCalls, tc.wantApproveCalls)
+				}
+				for i, want := range tc.wantApproveCalls {
+					if i < len(tc.op.approveCalls) && tc.op.approveCalls[i] != want {
+						t.Errorf("approve call %d: got %d, want %d", i, tc.op.approveCalls[i], want)
+					}
+				}
+			}
+
 			if tc.wantCommentCalls != nil {
 				if len(tc.op.commentCalls) != len(tc.wantCommentCalls) {
 					t.Errorf("comment calls: got %v, want %v", tc.op.commentCalls, tc.wantCommentCalls)
@@ -433,6 +498,17 @@ func TestRun(t *testing.T) {
 						if tc.op.commentCalls[i].Body != want.Body {
 							t.Errorf("comment call %d body: got %q, want %q", i, tc.op.commentCalls[i].Body, want.Body)
 						}
+					}
+				}
+			}
+
+			if tc.wantCallSequence != nil {
+				if len(tc.op.callSequence) != len(tc.wantCallSequence) {
+					t.Errorf("call sequence: got %v, want %v", tc.op.callSequence, tc.wantCallSequence)
+				}
+				for i, want := range tc.wantCallSequence {
+					if i < len(tc.op.callSequence) && tc.op.callSequence[i] != want {
+						t.Errorf("call sequence %d: got %q, want %q", i, tc.op.callSequence[i], want)
 					}
 				}
 			}

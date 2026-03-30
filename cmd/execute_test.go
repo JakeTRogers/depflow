@@ -29,6 +29,7 @@ func (f *fakeRepoResolver) ResolveRepo(_ context.Context) (string, error) {
 type fakeExecuteOperator struct {
 	viewedRepos    []string
 	comparedRepos  []string
+	approvedRepos  []string
 	mergedRepos    []string
 	viewResults    []githubcli.PRDetail
 	compareResults []githubcli.BranchComparison
@@ -59,6 +60,11 @@ func (f *fakeExecuteOperator) ViewPullRequest(_ context.Context, repo string, nu
 
 func (f *fakeExecuteOperator) MergePullRequest(_ context.Context, repo string, _ int) error {
 	f.mergedRepos = append(f.mergedRepos, repo)
+	return nil
+}
+
+func (f *fakeExecuteOperator) ApprovePullRequest(_ context.Context, repo string, _ int) error {
+	f.approvedRepos = append(f.approvedRepos, repo)
 	return nil
 }
 
@@ -123,6 +129,7 @@ func TestExecuteCommandResolvesRepoBeforeExecutorRun(t *testing.T) {
 	}
 	assertAllReposEqual(t, operator.viewedRepos, "owner/repo")
 	assertAllReposEqual(t, operator.comparedRepos, "owner/repo")
+	assertAllReposEqual(t, operator.approvedRepos, "owner/repo")
 	assertAllReposEqual(t, operator.mergedRepos, "owner/repo")
 }
 
@@ -158,8 +165,8 @@ func TestExecuteCommandFailsWhenRepoCannotBeResolved(t *testing.T) {
 	if !strings.Contains(err.Error(), "--repo OWNER/REPO") {
 		t.Fatalf("error = %q, want --repo hint", err)
 	}
-	if len(operator.viewedRepos) != 0 || len(operator.comparedRepos) != 0 || len(operator.mergedRepos) != 0 {
-		t.Fatalf("executor was called before repo resolution succeeded: viewed=%v compared=%v merged=%v", operator.viewedRepos, operator.comparedRepos, operator.mergedRepos)
+	if len(operator.viewedRepos) != 0 || len(operator.comparedRepos) != 0 || len(operator.approvedRepos) != 0 || len(operator.mergedRepos) != 0 {
+		t.Fatalf("executor was called before repo resolution succeeded: viewed=%v compared=%v approved=%v merged=%v", operator.viewedRepos, operator.comparedRepos, operator.approvedRepos, operator.mergedRepos)
 	}
 }
 
@@ -291,8 +298,8 @@ func TestExecuteCommandDryRunPrintsPlanWithoutResolvingRepoOrExecuting(t *testin
 	if resolver.calls != 0 {
 		t.Fatalf("ResolveRepo() calls = %d, want 0 in dry-run mode", resolver.calls)
 	}
-	if len(operator.viewedRepos) != 0 || len(operator.comparedRepos) != 0 || len(operator.mergedRepos) != 0 {
-		t.Fatalf("executor should not run in dry-run mode: viewed=%v compared=%v merged=%v", operator.viewedRepos, operator.comparedRepos, operator.mergedRepos)
+	if len(operator.viewedRepos) != 0 || len(operator.comparedRepos) != 0 || len(operator.approvedRepos) != 0 || len(operator.mergedRepos) != 0 {
+		t.Fatalf("executor should not run in dry-run mode: viewed=%v compared=%v approved=%v merged=%v", operator.viewedRepos, operator.comparedRepos, operator.approvedRepos, operator.mergedRepos)
 	}
 }
 
