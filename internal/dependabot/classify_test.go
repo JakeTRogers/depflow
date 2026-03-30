@@ -2,6 +2,7 @@ package dependabot
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/JakeTRogers/depflow/internal/githubcli"
@@ -96,6 +97,7 @@ func TestClassifyInfraSensitiveAndGroupedSignals(t *testing.T) {
 
 	infraClassification := classify(
 		"Bump docker/login-action from 2.1.0 to 3.0.0",
+		"",
 		"dependabot/github_actions/docker/login-action-3.0.0",
 		[]string{"dependencies"},
 	)
@@ -111,6 +113,7 @@ func TestClassifyInfraSensitiveAndGroupedSignals(t *testing.T) {
 
 	groupedClassification := classify(
 		"Bump the npm_and_yarn group with 3 updates",
+		"",
 		"dependabot/npm_and_yarn/group-frontend-deps",
 		[]string{"dependencies"},
 	)
@@ -174,7 +177,7 @@ func TestClassifyGroupedTitleVariants(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
-			classification := classify(test.title, test.headRef, []string{"dependencies"})
+			classification := classify(test.title, "", test.headRef, []string{"dependencies"})
 			if !classification.Grouped {
 				t.Fatal("Grouped = false, want true")
 			}
@@ -222,7 +225,7 @@ func TestClassifyConventionalCommitPrefixedGroupedTitles(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
-			classification := classify(test.title, test.headRef, []string{"dependencies"})
+			classification := classify(test.title, "", test.headRef, []string{"dependencies"})
 			if !classification.Grouped {
 				t.Fatal("Grouped = false, want true")
 			}
@@ -241,6 +244,7 @@ func TestClassifyConventionalCommitPrefixedSingleDependencyTitle(t *testing.T) {
 
 	classification := classify(
 		"build(deps): bump actions/cache from latest to stable",
+		"",
 		"",
 		[]string{"github_actions"},
 	)
@@ -263,6 +267,7 @@ func TestClassifyFallsBackToHeadRefDependencyInference(t *testing.T) {
 
 	classification := classify(
 		"Update dependency metadata",
+		"",
 		"dependabot/go_modules/github.com/spf13/cobra-1.10.2",
 		[]string{"dependencies"},
 	)
@@ -283,6 +288,7 @@ func TestClassifyUsesLabelAndTitleEcosystemHints(t *testing.T) {
 	classification := classify(
 		"Bump actions/checkout from latest to stable",
 		"",
+		"",
 		[]string{"github_actions"},
 	)
 	if classification.Ecosystem != "github-actions" {
@@ -293,5 +299,114 @@ func TestClassifyUsesLabelAndTitleEcosystemHints(t *testing.T) {
 	}
 	if classification.ChangeKind != ChangeUnknown {
 		t.Fatalf("ChangeKind = %q, want %q", classification.ChangeKind, ChangeUnknown)
+	}
+}
+
+func TestClassifyGroupedBodyMajorDetection(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name                    string
+		title                   string
+		body                    string
+		wantContainsMajorUpdate bool
+	}{
+		{
+			name:  "grouped summary with major bump",
+			title: "Bump the npm_and_yarn group with 3 updates",
+			body: strings.Join([]string{
+				"Updates `next` from 14.2.0 to 15.0.0",
+				"Updates `react` from 18.3.0 to 18.3.1",
+			}, "\n"),
+			wantContainsMajorUpdate: true,
+		},
+		{
+			name:  "grouped summary with only patch and minor bumps",
+			title: "Bump the npm_and_yarn group with 2 updates",
+			body: strings.Join([]string{
+				"Updates `vite` from 5.1.0 to 5.2.0",
+				"Updates `lodash` from 4.17.20 to 4.17.21",
+			}, "\n"),
+			wantContainsMajorUpdate: false,
+		},
+		{
+			name:  "grouped summary with mixed body and one major bump",
+			title: "Bump the npm_and_yarn group with 4 updates",
+			body: strings.Join([]string{
+				"Updates `eslint` from 8.57.0 to 8.57.1",
+				"Updates `typescript` from 5.5.4 to 5.6.2",
+				"Updates `next` from 14.2.0 to 15.0.0",
+			}, "\n"),
+			wantContainsMajorUpdate: true,
+		},
+		{
+			name:                    "grouped summary with no parseable versions",
+			title:                   "Bump the npm_and_yarn group with 2 updates",
+			body:                    "Updates dependencies to the latest versions.",
+			wantContainsMajorUpdate: false,
+		},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			classification := classify(test.title, test.body, "dependabot/npm_and_yarn/group-frontend-deps", []string{"dependencies"})
+			if !classification.Grouped {
+				t.Fatal("Grouped = false, want true")
+			}
+			if classification.ContainsMajorUpdate != test.wantContainsMajorUpdate {
+				t.Fatalf("ContainsMajorUpdate = %t, want %t", classification.ContainsMajorUpdate, test.wantContainsMajorUpdate)
+			}
+		})
+	}
+}
+
+func TestHasMajorVersionBump(t *testing.T) {
+	t.Parallel()
+
+	directMajor := classify(
+		"Bump github.com/foo/bar from 1.9.0 to 2.0.0",
+		"",
+		"dependabot/go_modules/github.com/foo/bar-2.0.0",
+		[]string{"dependencies"},
+	)
+
+	tests := []struct {
+		name           string
+		classification Classification
+		want           bool
+	}{
+		{
+			name:           "direct major via change kind",
+			classification: directMajor,
+			want:           true,
+		},
+		{
+			name: "grouped major via body signal",
+			classification: Classification{
+				ContainsMajorUpdate: true,
+			},
+			want: true,
+		},
+		{
+			name: "non-major classification",
+			classification: Classification{
+				ChangeKind: ChangeMinor,
+			},
+			want: false,
+		},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := test.classification.HasMajorVersionBump(); got != test.want {
+				t.Fatalf("HasMajorVersionBump() = %t, want %t", got, test.want)
+			}
+		})
 	}
 }

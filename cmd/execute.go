@@ -16,6 +16,7 @@ import (
 
 type executeOptions struct {
 	dryRun           bool
+	includeMajor     bool
 	pollInterval     time.Duration
 	checkTimeout     time.Duration
 	postMergeDelay   time.Duration
@@ -40,8 +41,24 @@ func newExecuteCommand(deps commandDeps, opts *commandOptions) *cobra.Command {
 				return err
 			}
 
-			plan := planner.Build(prs)
+			included, excluded := planner.PartitionMajor(prs, execOpts.includeMajor)
+			if len(excluded) > 0 {
+				if err := writeExcludedMajorUpdates(cmd.OutOrStdout(), "Excluding major updates", excluded); err != nil {
+					return err
+				}
+			}
+
+			plan := planner.Build(included)
 			if len(plan.Items) == 0 {
+				if len(excluded) > 0 {
+					if _, err := fmt.Fprintln(cmd.OutOrStdout()); err != nil {
+						return fmt.Errorf("writing execute output spacing: %w", err)
+					}
+					if _, err := fmt.Fprintln(cmd.OutOrStdout(), noEligiblePRsMessage); err != nil {
+						return fmt.Errorf("writing execute output: %w", err)
+					}
+					return nil
+				}
 				if _, err := fmt.Fprintln(cmd.OutOrStdout(), noOpenDependabotPRsMessage); err != nil {
 					return fmt.Errorf("writing execute output: %w", err)
 				}
@@ -49,7 +66,18 @@ func newExecuteCommand(deps commandDeps, opts *commandOptions) *cobra.Command {
 			}
 
 			if execOpts.dryRun {
+				if len(excluded) > 0 {
+					if _, err := fmt.Fprintln(cmd.OutOrStdout()); err != nil {
+						return fmt.Errorf("writing execute output spacing: %w", err)
+					}
+				}
 				return printDryRun(cmd.OutOrStdout(), plan)
+			}
+
+			if len(excluded) > 0 {
+				if _, err := fmt.Fprintln(cmd.OutOrStdout()); err != nil {
+					return fmt.Errorf("writing execute output spacing: %w", err)
+				}
 			}
 
 			cfg := executor.Config{
@@ -82,6 +110,7 @@ func newExecuteCommand(deps commandDeps, opts *commandOptions) *cobra.Command {
 	}
 
 	cmd.Flags().BoolVar(&execOpts.dryRun, "dry-run", false, "show planned order without executing")
+	cmd.Flags().BoolVarP(&execOpts.includeMajor, "include-major", "M", false, "include major version updates in execution")
 	cmd.Flags().DurationVar(&execOpts.pollInterval, "poll-interval", 30*time.Second, "CI status polling interval")
 	cmd.Flags().DurationVar(&execOpts.checkTimeout, "check-timeout", 30*time.Minute, "maximum wait for CI checks per PR")
 	cmd.Flags().DurationVar(&execOpts.postMergeDelay, "post-merge-delay", 10*time.Second, "delay before checking post-merge CI")

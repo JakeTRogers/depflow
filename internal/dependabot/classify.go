@@ -30,6 +30,7 @@ type Classification struct {
 	PreviousVersion         string
 	NextVersion             string
 	ChangeKind              ChangeKind
+	ContainsMajorUpdate     bool
 	Grouped                 bool
 	CI                      bool
 	DeveloperTooling        bool
@@ -125,12 +126,20 @@ func isDependabotAuthor(login string) bool {
 	return ok
 }
 
-func classify(title, headRef string, labels []string) Classification {
+func (c Classification) HasMajorVersionBump() bool {
+	return c.ChangeKind == ChangeMajor || c.ContainsMajorUpdate
+}
+
+func classify(title, body, headRef string, labels []string) Classification {
 	ecosystem := inferEcosystem(headRef, title, labels)
 	dependencyName := inferDependencyName(title, headRef, ecosystem)
 	previousVersion, nextVersion := inferVersionRange(title)
 	changeKind := inferChangeKind(previousVersion, nextVersion)
 	grouped := inferGrouped(title, headRef, labels)
+	containsMajorUpdate := false
+	if grouped {
+		containsMajorUpdate = containsGroupedMajorUpdate(body)
+	}
 	signalText := buildSignalText(title, headRef, labels, ecosystem, dependencyName)
 	devMatches := matchKeywords(signalText, devToolingKeywords)
 	infraMatches := matchKeywords(signalText, infraSensitiveKeywords)
@@ -141,6 +150,7 @@ func classify(title, headRef string, labels []string) Classification {
 		PreviousVersion:         previousVersion,
 		NextVersion:             nextVersion,
 		ChangeKind:              changeKind,
+		ContainsMajorUpdate:     containsMajorUpdate,
 		Grouped:                 grouped,
 		CI:                      ecosystem == "github-actions",
 		DeveloperTooling:        len(devMatches) > 0,
@@ -316,6 +326,20 @@ func inferChangeKind(previousVersion, nextVersion string) ChangeKind {
 	default:
 		return ChangeUnknown
 	}
+}
+
+func containsGroupedMajorUpdate(body string) bool {
+	matches := fromToPattern.FindAllStringSubmatch(strings.TrimSpace(body), -1)
+	for _, match := range matches {
+		if len(match) != 3 {
+			continue
+		}
+		if inferChangeKind(match[1], match[2]) == ChangeMajor {
+			return true
+		}
+	}
+
+	return false
 }
 
 func parseSemanticVersion(value string) (semanticVersion, bool) {

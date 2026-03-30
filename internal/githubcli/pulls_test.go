@@ -28,7 +28,7 @@ func TestListOpenPullRequests(t *testing.T) {
 	t.Parallel()
 
 	executor := &stubExecutor{output: []byte(`[
-		{"number":1,"title":"Bump actions/cache from 4.2.0 to 4.2.1","url":"https://example.test/pr/1","isDraft":false,"author":{"login":"dependabot[bot]"},"labels":[{"name":"dependencies"}],"headRefName":"dependabot/github_actions/actions/cache-4.2.1","baseRefName":"main"}
+		{"number":1,"title":"Bump actions/cache from 4.2.0 to 4.2.1","body":"- Bumps [actions/cache](https://github.com/actions/cache) from 4.2.0 to 4.2.1.","url":"https://example.test/pr/1","isDraft":false,"author":{"login":"dependabot[bot]"},"labels":[{"name":"dependencies"}],"headRefName":"dependabot/github_actions/actions/cache-4.2.1","baseRefName":"main"}
 	]`)}
 	client := newClient(executor)
 
@@ -43,6 +43,9 @@ func TestListOpenPullRequests(t *testing.T) {
 	if pullRequests[0].Number != 1 {
 		t.Fatalf("pullRequests[0].Number = %d, want 1", pullRequests[0].Number)
 	}
+	if pullRequests[0].Body == "" {
+		t.Fatal("pullRequests[0].Body = empty, want decoded body text")
+	}
 
 	wantArgs := []string{
 		"pr",
@@ -52,7 +55,7 @@ func TestListOpenPullRequests(t *testing.T) {
 		"--limit",
 		"50",
 		"--json",
-		"number,title,url,isDraft,author,labels,headRefName,baseRefName",
+		"number,title,body,url,isDraft,author,labels,headRefName,baseRefName",
 		"--repo",
 		"owner/repo",
 	}

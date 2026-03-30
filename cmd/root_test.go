@@ -227,11 +227,169 @@ func TestPlanCommandOrdersPRs(t *testing.T) {
 	if !strings.Contains(stdout, "reason: grouped update sorts after simple low-risk updates") {
 		t.Fatalf("plan output missing grouped rationale: %q", stdout)
 	}
+	if strings.Contains(stdout, "Excluded major updates") {
+		t.Fatalf("plan output should not render excluded section when no major PRs exist: %q", stdout)
+	}
 	if !strings.Contains(stdout, "signals: ecosystem=npm-and-yarn change=unknown grouped=yes dev-tooling=no infra-sensitive=no") {
 		t.Fatalf("plan output missing grouped signal details: %q", stdout)
 	}
 	if !strings.Contains(stdout, "dependency: lodash (frontend group)") {
 		t.Fatalf("plan output missing grouped dependency summary: %q", stdout)
+	}
+}
+
+func TestPlanCommandGroupedSummaryWithoutParseableVersionsRemainsIncluded(t *testing.T) {
+	t.Parallel()
+
+	lister := &fakeLister{
+		pullRequests: []githubcli.PullRequest{{
+			Number:      13,
+			Title:       "Bump the npm_and_yarn group with 2 updates",
+			Body:        "Updates dependencies to the latest versions.",
+			URL:         "https://example.test/pr/13",
+			Author:      githubcli.PullRequestAuthor{Login: "dependabot[bot]"},
+			Labels:      []githubcli.PullRequestLabel{{Name: "dependencies"}},
+			HeadRefName: "dependabot/npm_and_yarn/group-frontend-deps",
+			BaseRefName: "main",
+		}},
+	}
+
+	stdout, err := executeTestCommand(t, lister, "plan")
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	if !strings.Contains(stdout, "Planned order for 1 Dependabot pull request(s)") {
+		t.Fatalf("plan output missing grouped summary plan header: %q", stdout)
+	}
+	if !strings.Contains(stdout, "1. #13 [grouped] Bump the npm_and_yarn group with 2 updates") {
+		t.Fatalf("plan output missing included grouped summary PR: %q", stdout)
+	}
+	if strings.Contains(stdout, "Excluded major updates") {
+		t.Fatalf("plan output should not exclude grouped summaries without parseable versions: %q", stdout)
+	}
+	if strings.Contains(stdout, noOpenDependabotPRsMessage) {
+		t.Fatalf("plan output incorrectly reported no PRs: %q", stdout)
+	}
+}
+
+func TestPlanCommandExcludesMajorUpdatesByDefault(t *testing.T) {
+	t.Parallel()
+
+	lister := &fakeLister{
+		pullRequests: []githubcli.PullRequest{
+			{
+				Number:      1,
+				Title:       "Bump actions/cache from 4.2.0 to 4.2.1",
+				URL:         "https://example.test/pr/1",
+				Author:      githubcli.PullRequestAuthor{Login: "dependabot[bot]"},
+				Labels:      []githubcli.PullRequestLabel{{Name: "dependencies"}},
+				HeadRefName: "dependabot/github_actions/actions/cache-4.2.1",
+				BaseRefName: "main",
+			},
+			{
+				Number:      9,
+				Title:       "Bump the npm_and_yarn group with 2 updates",
+				Body:        "Updates `next` from 14.2.0 to 15.0.0\nUpdates `react` from 18.3.0 to 18.3.1",
+				URL:         "https://example.test/pr/9",
+				Author:      githubcli.PullRequestAuthor{Login: "dependabot[bot]"},
+				Labels:      []githubcli.PullRequestLabel{{Name: "dependencies"}},
+				HeadRefName: "dependabot/npm_and_yarn/group-frontend-deps",
+				BaseRefName: "main",
+			},
+		},
+	}
+
+	stdout, err := executeTestCommand(t, lister, "plan")
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	if !strings.Contains(stdout, "Planned order for 1 Dependabot pull request(s)") {
+		t.Fatalf("plan output missing filtered plan header: %q", stdout)
+	}
+	if !strings.Contains(stdout, "1. #1 [ci] Bump actions/cache from 4.2.0 to 4.2.1") {
+		t.Fatalf("plan output missing included PR: %q", stdout)
+	}
+	if !strings.Contains(stdout, "Excluded major updates (1):") {
+		t.Fatalf("plan output missing excluded section: %q", stdout)
+	}
+	if !strings.Contains(stdout, "#9 Bump the npm_and_yarn group with 2 updates") {
+		t.Fatalf("plan output missing excluded major PR: %q", stdout)
+	}
+}
+
+func TestPlanCommandIncludeMajorFlagIncludesAllPRs(t *testing.T) {
+	t.Parallel()
+
+	lister := &fakeLister{
+		pullRequests: []githubcli.PullRequest{
+			{
+				Number:      1,
+				Title:       "Bump actions/cache from 4.2.0 to 4.2.1",
+				URL:         "https://example.test/pr/1",
+				Author:      githubcli.PullRequestAuthor{Login: "dependabot[bot]"},
+				Labels:      []githubcli.PullRequestLabel{{Name: "dependencies"}},
+				HeadRefName: "dependabot/github_actions/actions/cache-4.2.1",
+				BaseRefName: "main",
+			},
+			{
+				Number:      9,
+				Title:       "Bump the npm_and_yarn group with 2 updates",
+				Body:        "Updates `next` from 14.2.0 to 15.0.0\nUpdates `react` from 18.3.0 to 18.3.1",
+				URL:         "https://example.test/pr/9",
+				Author:      githubcli.PullRequestAuthor{Login: "dependabot[bot]"},
+				Labels:      []githubcli.PullRequestLabel{{Name: "dependencies"}},
+				HeadRefName: "dependabot/npm_and_yarn/group-frontend-deps",
+				BaseRefName: "main",
+			},
+		},
+	}
+
+	stdout, err := executeTestCommand(t, lister, "plan", "-M")
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	if !strings.Contains(stdout, "Planned order for 2 Dependabot pull request(s)") {
+		t.Fatalf("plan output missing full plan header: %q", stdout)
+	}
+	if !strings.Contains(stdout, "2. #9 [major] Bump the npm_and_yarn group with 2 updates") {
+		t.Fatalf("plan output missing included grouped major PR: %q", stdout)
+	}
+	if strings.Contains(stdout, "Excluded major updates") {
+		t.Fatalf("plan output should not render excluded section with -M: %q", stdout)
+	}
+}
+
+func TestPlanCommandAllMajorShowsZeroPlanAndExcludedSection(t *testing.T) {
+	t.Parallel()
+
+	lister := &fakeLister{
+		pullRequests: []githubcli.PullRequest{{
+			Number:      21,
+			Title:       "Bump github.com/pkg/errors from 0.9.1 to 1.0.0",
+			URL:         "https://example.test/pr/21",
+			Author:      githubcli.PullRequestAuthor{Login: "dependabot[bot]"},
+			Labels:      []githubcli.PullRequestLabel{{Name: "dependencies"}},
+			HeadRefName: "dependabot/go_modules/github.com/pkg/errors-1.0.0",
+			BaseRefName: "main",
+		}},
+	}
+
+	stdout, err := executeTestCommand(t, lister, "plan")
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	if !strings.Contains(stdout, "Planned order for 0 Dependabot pull request(s)") {
+		t.Fatalf("plan output missing zero-plan header: %q", stdout)
+	}
+	if !strings.Contains(stdout, "Excluded major updates (1):") {
+		t.Fatalf("plan output missing excluded section: %q", stdout)
+	}
+	if strings.Contains(stdout, noOpenDependabotPRsMessage) {
+		t.Fatalf("plan output incorrectly reported no PRs: %q", stdout)
 	}
 }
 
@@ -277,6 +435,34 @@ func TestScanCommandNoResults(t *testing.T) {
 	}
 	if strings.TrimSpace(stdout) != "No open Dependabot pull requests found." {
 		t.Fatalf("stdout = %q", stdout)
+	}
+}
+
+func TestScanCommandStillShowsMajorPRs(t *testing.T) {
+	t.Parallel()
+
+	lister := &fakeLister{
+		pullRequests: []githubcli.PullRequest{{
+			Number:      11,
+			Title:       "Bump github.com/pkg/errors from 0.9.1 to 1.0.0",
+			URL:         "https://example.test/pr/11",
+			Author:      githubcli.PullRequestAuthor{Login: "dependabot[bot]"},
+			Labels:      []githubcli.PullRequestLabel{{Name: "dependencies"}},
+			HeadRefName: "dependabot/go_modules/github.com/pkg/errors-1.0.0",
+			BaseRefName: "main",
+		}},
+	}
+
+	stdout, err := executeTestCommand(t, lister, "scan")
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	if !strings.Contains(stdout, "#11 Bump github.com/pkg/errors from 0.9.1 to 1.0.0") {
+		t.Fatalf("scan output missing major PR: %q", stdout)
+	}
+	if !strings.Contains(stdout, "classification: ecosystem=go-modules change=major grouped=no dev-tooling=no infra-sensitive=no") {
+		t.Fatalf("scan output missing major classification details: %q", stdout)
 	}
 }
 
