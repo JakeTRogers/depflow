@@ -28,6 +28,7 @@ var sleepFunc = func(ctx context.Context, delay time.Duration) error {
 // Operator combines all GitHub operations needed by the executor.
 type Operator interface {
 	ViewPullRequest(ctx context.Context, repo string, number int) (githubcli.PRDetail, error)
+	ApprovePullRequest(ctx context.Context, repo string, number int) error
 	MergePullRequest(ctx context.Context, repo string, number int) error
 	CommentOnPR(ctx context.Context, repo string, number int, body string) error
 	ListWorkflowRuns(ctx context.Context, repo string, branch string) ([]githubcli.WorkflowRun, error)
@@ -206,6 +207,12 @@ func Run(ctx context.Context, op Operator, plan planner.Plan, repo string, cfg C
 			mergeErr := fmt.Errorf("PR #%d: branch still %d commit(s) behind base after update", item.PR.Number, comparison.BehindBy)
 			record(item, statusFailed, mergeErr, fmt.Sprintf("Failed PR #%d", item.PR.Number))
 			return result, executionFailure(item.PR.Number, mergeErr)
+		}
+
+		progress.SetStatus(fmt.Sprintf("Approving PR #%d", item.PR.Number))
+		if err := op.ApprovePullRequest(ctx, repo, item.PR.Number); err != nil {
+			record(item, statusFailed, err, fmt.Sprintf("Failed PR #%d", item.PR.Number))
+			return result, fmt.Errorf("approving PR #%d: %w", item.PR.Number, err)
 		}
 
 		progress.SetStatus(fmt.Sprintf("Merging PR #%d", item.PR.Number))

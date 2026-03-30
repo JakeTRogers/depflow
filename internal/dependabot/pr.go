@@ -46,6 +46,7 @@ func Normalize(raw githubcli.PullRequest) (PR, bool) {
 		Draft:   raw.IsDraft,
 		Classification: classify(
 			raw.Title,
+			raw.Body,
 			raw.HeadRefName,
 			labels,
 		),

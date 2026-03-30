@@ -9,8 +9,14 @@ import (
 	"github.com/spf13/cobra"
 )
 
+type planOptions struct {
+	includeMajor bool
+}
+
 func newPlanCommand(deps commandDeps, opts *commandOptions) *cobra.Command {
-	return &cobra.Command{
+	planOpts := &planOptions{}
+
+	cmd := &cobra.Command{
 		Use:   "plan",
 		Short: "Show the deterministic Dependabot processing order",
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -19,8 +25,9 @@ func newPlanCommand(deps commandDeps, opts *commandOptions) *cobra.Command {
 				return err
 			}
 
-			plan := planner.Build(prs)
-			if len(plan.Items) == 0 {
+			included, excluded := planner.PartitionMajor(prs, planOpts.includeMajor)
+			plan := planner.Build(included)
+			if len(plan.Items) == 0 && len(excluded) == 0 {
 				if _, err := fmt.Fprintln(cmd.OutOrStdout(), noOpenDependabotPRsMessage); err != nil {
 					return fmt.Errorf("writing plan output: %w", err)
 				}
@@ -42,9 +49,24 @@ func newPlanCommand(deps commandDeps, opts *commandOptions) *cobra.Command {
 				}
 			}
 
+			if len(excluded) > 0 {
+				if len(plan.Items) > 0 {
+					if _, err := fmt.Fprintln(cmd.OutOrStdout()); err != nil {
+						return fmt.Errorf("writing plan separator: %w", err)
+					}
+				}
+				if err := writeExcludedMajorUpdates(cmd.OutOrStdout(), "Excluded major updates", excluded); err != nil {
+					return err
+				}
+			}
+
 			return nil
 		},
 	}
+
+	cmd.Flags().BoolVarP(&planOpts.includeMajor, "include-major", "M", false, "include major version updates in planning")
+
+	return cmd
 }
 
 func writePlannedPR(writer io.Writer, index int, item planner.PlannedPR) error {

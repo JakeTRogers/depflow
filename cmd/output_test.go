@@ -107,6 +107,31 @@ func TestWritePlannedPRSanitizesGitHubFields(t *testing.T) {
 	}
 }
 
+func TestWriteExcludedMajorUpdatesSanitizesTitles(t *testing.T) {
+	t.Parallel()
+
+	excluded := []dependabot.PR{{
+		Number: 8,
+		Title:  "Bump \x1b[31mnext\x07 from 14.2.0 to 15.0.0",
+	}}
+
+	var output bytes.Buffer
+	if err := writeExcludedMajorUpdates(&output, "Excluded major updates", excluded); err != nil {
+		t.Fatalf("writeExcludedMajorUpdates() error = %v", err)
+	}
+
+	got := output.String()
+	if strings.ContainsAny(got, "\x00\x07\x1b\x7f") {
+		t.Fatalf("excluded output contains terminal control bytes: %q", got)
+	}
+	if !strings.Contains(got, "Excluded major updates (1):") {
+		t.Fatalf("excluded output = %q, want heading", got)
+	}
+	if !strings.Contains(got, "#8 Bump [31mnext from 14.2.0 to 15.0.0") {
+		t.Fatalf("excluded output = %q, want sanitized title", got)
+	}
+}
+
 func TestPrintDryRunAndResultSanitizeTitlesAndErrors(t *testing.T) {
 	t.Parallel()
 

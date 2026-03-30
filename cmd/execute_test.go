@@ -29,6 +29,7 @@ func (f *fakeRepoResolver) ResolveRepo(_ context.Context) (string, error) {
 type fakeExecuteOperator struct {
 	viewedRepos    []string
 	comparedRepos  []string
+	approvedRepos  []string
 	mergedRepos    []string
 	viewResults    []githubcli.PRDetail
 	compareResults []githubcli.BranchComparison
@@ -59,6 +60,11 @@ func (f *fakeExecuteOperator) ViewPullRequest(_ context.Context, repo string, nu
 
 func (f *fakeExecuteOperator) MergePullRequest(_ context.Context, repo string, _ int) error {
 	f.mergedRepos = append(f.mergedRepos, repo)
+	return nil
+}
+
+func (f *fakeExecuteOperator) ApprovePullRequest(_ context.Context, repo string, _ int) error {
+	f.approvedRepos = append(f.approvedRepos, repo)
 	return nil
 }
 
@@ -123,6 +129,7 @@ func TestExecuteCommandResolvesRepoBeforeExecutorRun(t *testing.T) {
 	}
 	assertAllReposEqual(t, operator.viewedRepos, "owner/repo")
 	assertAllReposEqual(t, operator.comparedRepos, "owner/repo")
+	assertAllReposEqual(t, operator.approvedRepos, "owner/repo")
 	assertAllReposEqual(t, operator.mergedRepos, "owner/repo")
 }
 
@@ -158,8 +165,8 @@ func TestExecuteCommandFailsWhenRepoCannotBeResolved(t *testing.T) {
 	if !strings.Contains(err.Error(), "--repo OWNER/REPO") {
 		t.Fatalf("error = %q, want --repo hint", err)
 	}
-	if len(operator.viewedRepos) != 0 || len(operator.comparedRepos) != 0 || len(operator.mergedRepos) != 0 {
-		t.Fatalf("executor was called before repo resolution succeeded: viewed=%v compared=%v merged=%v", operator.viewedRepos, operator.comparedRepos, operator.mergedRepos)
+	if len(operator.viewedRepos) != 0 || len(operator.comparedRepos) != 0 || len(operator.approvedRepos) != 0 || len(operator.mergedRepos) != 0 {
+		t.Fatalf("executor was called before repo resolution succeeded: viewed=%v compared=%v approved=%v merged=%v", operator.viewedRepos, operator.comparedRepos, operator.approvedRepos, operator.mergedRepos)
 	}
 }
 
@@ -288,11 +295,193 @@ func TestExecuteCommandDryRunPrintsPlanWithoutResolvingRepoOrExecuting(t *testin
 	if !strings.Contains(stdout.String(), "1. #42 [patch] Bump lodash from 4.17.20 to 4.17.21") {
 		t.Fatalf("stdout = %q, want planned PR entry", stdout.String())
 	}
+	if strings.Contains(stdout.String(), "Excluding major updates") {
+		t.Fatalf("stdout = %q, should not render exclusion notice when no major PRs exist", stdout.String())
+	}
 	if resolver.calls != 0 {
 		t.Fatalf("ResolveRepo() calls = %d, want 0 in dry-run mode", resolver.calls)
 	}
-	if len(operator.viewedRepos) != 0 || len(operator.comparedRepos) != 0 || len(operator.mergedRepos) != 0 {
-		t.Fatalf("executor should not run in dry-run mode: viewed=%v compared=%v merged=%v", operator.viewedRepos, operator.comparedRepos, operator.mergedRepos)
+	if len(operator.viewedRepos) != 0 || len(operator.comparedRepos) != 0 || len(operator.approvedRepos) != 0 || len(operator.mergedRepos) != 0 {
+		t.Fatalf("executor should not run in dry-run mode: viewed=%v compared=%v approved=%v merged=%v", operator.viewedRepos, operator.comparedRepos, operator.approvedRepos, operator.mergedRepos)
+	}
+}
+
+func TestExecuteCommandExcludesMajorUpdatesByDefault(t *testing.T) {
+	t.Parallel()
+
+	lister := &fakeLister{
+		pullRequests: []githubcli.PullRequest{
+			{
+				Number:      1,
+				Title:       "Bump lodash from 4.17.20 to 4.17.21",
+				URL:         "https://example.test/pr/1",
+				Author:      githubcli.PullRequestAuthor{Login: "dependabot[bot]"},
+				Labels:      []githubcli.PullRequestLabel{{Name: "dependencies"}},
+				HeadRefName: "dependabot/npm_and_yarn/lodash-4.17.21",
+				BaseRefName: "main",
+			},
+			{
+				Number:      2,
+				Title:       "Bump github.com/pkg/errors from 0.9.1 to 1.0.0",
+				URL:         "https://example.test/pr/2",
+				Author:      githubcli.PullRequestAuthor{Login: "dependabot[bot]"},
+				Labels:      []githubcli.PullRequestLabel{{Name: "dependencies"}},
+				HeadRefName: "dependabot/go_modules/github.com/pkg/errors-1.0.0",
+				BaseRefName: "main",
+			},
+		},
+	}
+	operator := &fakeExecuteOperator{}
+	resolver := &fakeRepoResolver{repo: "owner/repo"}
+
+	cmd := newRootCommand(commandDeps{lister: lister, operator: operator, resolver: resolver})
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	cmd.SetArgs([]string{"execute"})
+	cmd.SetOut(stdout)
+	cmd.SetErr(stderr)
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	if !strings.Contains(stdout.String(), "Excluding major updates (1):") {
+		t.Fatalf("stdout = %q, want exclusion notice", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "#2 Bump github.com/pkg/errors from 0.9.1 to 1.0.0") {
+		t.Fatalf("stdout = %q, want excluded major PR", stdout.String())
+	}
+	if resolver.calls != 1 {
+		t.Fatalf("ResolveRepo() calls = %d, want 1", resolver.calls)
+	}
+	if len(operator.approvedRepos) != 1 || len(operator.mergedRepos) != 1 {
+		t.Fatalf("executor should process only the non-major PR: approved=%v merged=%v", operator.approvedRepos, operator.mergedRepos)
+	}
+}
+
+func TestExecuteCommandAllMajorIsNoOp(t *testing.T) {
+	t.Parallel()
+
+	lister := &fakeLister{
+		pullRequests: []githubcli.PullRequest{{
+			Number:      2,
+			Title:       "Bump github.com/pkg/errors from 0.9.1 to 1.0.0",
+			URL:         "https://example.test/pr/2",
+			Author:      githubcli.PullRequestAuthor{Login: "dependabot[bot]"},
+			Labels:      []githubcli.PullRequestLabel{{Name: "dependencies"}},
+			HeadRefName: "dependabot/go_modules/github.com/pkg/errors-1.0.0",
+			BaseRefName: "main",
+		}},
+	}
+	operator := &fakeExecuteOperator{}
+	resolver := &fakeRepoResolver{repo: "owner/repo"}
+
+	cmd := newRootCommand(commandDeps{lister: lister, operator: operator, resolver: resolver})
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	cmd.SetArgs([]string{"execute"})
+	cmd.SetOut(stdout)
+	cmd.SetErr(stderr)
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	if !strings.Contains(stdout.String(), "Excluding major updates (1):") {
+		t.Fatalf("stdout = %q, want exclusion notice", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), noEligiblePRsMessage) {
+		t.Fatalf("stdout = %q, want no-op message", stdout.String())
+	}
+	if resolver.calls != 0 {
+		t.Fatalf("ResolveRepo() calls = %d, want 0", resolver.calls)
+	}
+	if len(operator.viewedRepos) != 0 || len(operator.comparedRepos) != 0 || len(operator.approvedRepos) != 0 || len(operator.mergedRepos) != 0 {
+		t.Fatalf("executor should not run for all-major no-op: viewed=%v compared=%v approved=%v merged=%v", operator.viewedRepos, operator.comparedRepos, operator.approvedRepos, operator.mergedRepos)
+	}
+}
+
+func TestExecuteCommandDryRunWithExclusions(t *testing.T) {
+	t.Parallel()
+
+	lister := &fakeLister{
+		pullRequests: []githubcli.PullRequest{
+			{
+				Number:      1,
+				Title:       "Bump lodash from 4.17.20 to 4.17.21",
+				URL:         "https://example.test/pr/1",
+				Author:      githubcli.PullRequestAuthor{Login: "dependabot[bot]"},
+				Labels:      []githubcli.PullRequestLabel{{Name: "dependencies"}},
+				HeadRefName: "dependabot/npm_and_yarn/lodash-4.17.21",
+				BaseRefName: "main",
+			},
+			{
+				Number:      2,
+				Title:       "Bump github.com/pkg/errors from 0.9.1 to 1.0.0",
+				URL:         "https://example.test/pr/2",
+				Author:      githubcli.PullRequestAuthor{Login: "dependabot[bot]"},
+				Labels:      []githubcli.PullRequestLabel{{Name: "dependencies"}},
+				HeadRefName: "dependabot/go_modules/github.com/pkg/errors-1.0.0",
+				BaseRefName: "main",
+			},
+		},
+	}
+
+	stdout, err := executeTestCommand(t, lister, "execute", "--dry-run")
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	if !strings.Contains(stdout, "Excluding major updates (1):") {
+		t.Fatalf("stdout = %q, want exclusion notice", stdout)
+	}
+	if !strings.Contains(stdout, "Dry run: 1 PR(s) would be processed in this order:") {
+		t.Fatalf("stdout = %q, want filtered dry-run header", stdout)
+	}
+	if !strings.Contains(stdout, "1. #1 [patch] Bump lodash from 4.17.20 to 4.17.21") {
+		t.Fatalf("stdout = %q, want non-major dry-run item", stdout)
+	}
+}
+
+func TestExecuteCommandIncludeMajorFlagIncludesAllPRs(t *testing.T) {
+	t.Parallel()
+
+	lister := &fakeLister{
+		pullRequests: []githubcli.PullRequest{
+			{
+				Number:      1,
+				Title:       "Bump lodash from 4.17.20 to 4.17.21",
+				URL:         "https://example.test/pr/1",
+				Author:      githubcli.PullRequestAuthor{Login: "dependabot[bot]"},
+				Labels:      []githubcli.PullRequestLabel{{Name: "dependencies"}},
+				HeadRefName: "dependabot/npm_and_yarn/lodash-4.17.21",
+				BaseRefName: "main",
+			},
+			{
+				Number:      2,
+				Title:       "Bump github.com/pkg/errors from 0.9.1 to 1.0.0",
+				URL:         "https://example.test/pr/2",
+				Author:      githubcli.PullRequestAuthor{Login: "dependabot[bot]"},
+				Labels:      []githubcli.PullRequestLabel{{Name: "dependencies"}},
+				HeadRefName: "dependabot/go_modules/github.com/pkg/errors-1.0.0",
+				BaseRefName: "main",
+			},
+		},
+	}
+
+	stdout, err := executeTestCommand(t, lister, "execute", "--dry-run", "-M")
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	if strings.Contains(stdout, "Excluding major updates") {
+		t.Fatalf("stdout = %q, should not exclude majors with -M", stdout)
+	}
+	if !strings.Contains(stdout, "Dry run: 2 PR(s) would be processed in this order:") {
+		t.Fatalf("stdout = %q, want full dry-run header", stdout)
+	}
+	if !strings.Contains(stdout, "2. #2 [major] Bump github.com/pkg/errors from 0.9.1 to 1.0.0") {
+		t.Fatalf("stdout = %q, want included major dry-run item", stdout)
 	}
 }
 

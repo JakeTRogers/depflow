@@ -10,6 +10,7 @@ import (
 type PullRequest struct {
 	Number      int                `json:"number"`
 	Title       string             `json:"title"`
+	Body        string             `json:"body"`
 	URL         string             `json:"url"`
 	IsDraft     bool               `json:"isDraft"`
 	Author      PullRequestAuthor  `json:"author"`
@@ -42,7 +43,7 @@ func (c *client) ListOpenPullRequests(ctx context.Context, repo string, limit in
 		"--limit",
 		strconv.Itoa(limit),
 		"--json",
-		"number,title,url,isDraft,author,labels,headRefName,baseRefName",
+		"number,title,body,url,isDraft,author,labels,headRefName,baseRefName",
 	}
 	if repo != "" {
 		args = append(args, "--repo", repo)
