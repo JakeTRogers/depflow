@@ -12,7 +12,7 @@ depflow is a Go 1.25 CLI tool for discovering open Dependabot pull requests, pla
 	- `root.go` — Root command, global flags (`--repo`, `--limit`, `-v/--verbose`), dependency injection via `commandDeps` (holds `prLister`, `prOperator`, and `repoResolver` interfaces), and signal-aware root execution via `signal.NotifyContext` and `ExecuteContext`
 	- `scan.go` — `scan` subcommand, lists open Dependabot PRs with metadata
 	- `plan.go` — `plan` subcommand, shows deterministic processing order, excludes major-version PRs by default unless `--include-major` / `-M` is set, and renders excluded majors separately when they are filtered out
-	- `execute.go` — `execute` subcommand, validates positive duration flags plus a minimum `--poll-interval` of 5s and timeout `>` poll-interval relationships, excludes major-version PRs by default unless `--include-major` / `-M` is set, prints excluded majors before dry-run or execution, no-ops when nothing remains after exclusion, resolves the repo when `--repo` is omitted, and wires the executor with progress tracker and verbosity-controlled logger. Execute-specific flags: `--dry-run`, `--include-major`, `--poll-interval`, `--check-timeout`, `--post-merge-delay`, `--post-merge-timeout`
+	- `execute.go` — `execute` subcommand, validates positive duration flags plus a minimum `--poll-interval` of 5s and timeout `>` poll-interval relationships, excludes major-version PRs by default unless `--include-major` / `-M` is set, prints excluded majors before dry-run or execution, no-ops when nothing remains after exclusion, resolves the repo when `--repo` is omitted, and wires the executor with progress tracker and verbosity-controlled logger. `--admin` waits for all pre-merge checks to settle, logs warnings for each failed check, and forwards the admin override to merge. Execute-specific flags: `--dry-run`, `--include-major`, `--admin`, `--poll-interval`, `--check-timeout`, `--post-merge-delay`, `--post-merge-timeout`
 	- `version.go` — `version` subcommand, prints version and platform
 	- `discovery.go` — Shared PR discovery logic used by scan, plan, and execute
 
@@ -24,7 +24,7 @@ depflow is a Go 1.25 CLI tool for discovering open Dependabot pull requests, pla
 	- `plan.go` — `Plan` and `PlannedPR` types, `PartitionMajor()` splits discovered PRs into included vs excluded sets for command-level `--include-major` handling, and `Build()` sorts included PRs into buckets (ci → developer-tooling → patch → minor → grouped → unknown → infra-sensitive → major) with tie-breaking by change kind rank, ecosystem, dependency name, title, PR number
 
 - `internal/executor/` — Sequential PR processing loop
-	- `executor.go` — `Operator` interface (ViewPullRequest, ApprovePullRequest, MergePullRequest, CommentOnPR, ListWorkflowRuns, CompareBranches), `Progress` interface (SetStatus, Increment), `Config`, `PRResult`, `Result` types, `Run()` orchestration function
+	- `executor.go` — `Operator` interface (ViewPullRequest, ApprovePullRequest, MergePullRequest, CommentOnPR, ListWorkflowRuns, CompareBranches), `Progress` interface (SetStatus, Increment), `Config` (including `Admin bool`), `PRResult`, `Result` types, `Run()` orchestration function
 	- `wait.go` — `waitForChecks()`, `waitForPostMergeCI()` (correlates runs by merge commit SHA and exits early on terminal failures), `waitForBranchUpdate()` polling helpers
 	- `errors.go` — Sentinel errors: `ErrExecutionFailed`, `ErrCheckFailed`, `ErrCheckTimeout`, `ErrBranchUpdateTimeout`, `ErrMergeConflict`, `ErrPostMergeTimeout`
 
@@ -33,7 +33,7 @@ depflow is a Go 1.25 CLI tool for discovering open Dependabot pull requests, pla
 	- `pulls.go` — `ListOpenPullRequests()`, `PullRequest` type, and discovery transport for open PR fields including `Body` so grouped-major detection can happen during normalization without per-PR detail fetches
 	- `pr_detail.go` — `ViewPullRequest()`, `PRDetail`, `MergeCommit`, and `StatusCheck` types; `PRDetail.MergeCommit.OID` carries the merge commit SHA used after merge
 	- `approve.go` — `ApprovePullRequest()` via `gh pr review --approve`
-	- `merge.go` — `MergePullRequest()` (merge commit + delete branch)
+	- `merge.go` — `MergePullRequest()` (merge commit + delete branch, optionally forwarding `--admin`)
 	- `comment.go` — `CommentOnPR()` (used for `@dependabot rebase`)
 	- `compare.go` — `CompareBranches()` via GitHub API with URL-escaped refs, `BranchComparison` type
 	- `runs.go` — `ListWorkflowRuns()`, `WorkflowRun` type with `HeadSHA` for merge-SHA correlation
@@ -51,7 +51,7 @@ depflow is a Go 1.25 CLI tool for discovering open Dependabot pull requests, pla
 - `githubcli.PullRequest` — Open PR transport payload including `Body` for grouped-major classification during discovery
 - `executor.Operator` — Interface for all GitHub operations including pre-merge approval (satisfied by the package-private GitHub CLI client returned by `githubcli.NewClient()`)
 - `executor.Progress` — Interface for progress updates (satisfied by the package-private tracker returned by `progress.NewTracker()`)
-- `executor.Config` — Polling intervals and timeouts
+- `executor.Config` — `Admin bool` plus polling intervals and timeouts
 - `executor.Result` / `executor.PRResult` — Execution outcomes
 - `progress.Verbosity` — Quiet (0) / Info (1) / Debug (2) / Trace (3)
 - `githubcli.PRDetail` — Detailed PR state including `MergeCommit.OID` for merged PR confirmation
@@ -62,7 +62,7 @@ depflow is a Go 1.25 CLI tool for discovering open Dependabot pull requests, pla
 
 - `depflow scan` — read-only, lists open Dependabot PRs with classification
 - `depflow plan` — read-only, shows deterministic processing order for non-major Dependabot PRs by default and includes major PRs only when `--include-major` / `-M` is set
-- `depflow execute` — mutating, processes non-major Dependabot PRs sequentially by default, reports excluded majors unless `--include-major` / `-M` is set, and then runs the signal-aware execution flow (rebase → CI wait → approve → merge → post-merge CI wait correlated by merge commit SHA)
+- `depflow execute` — mutating, processes non-major Dependabot PRs sequentially by default, reports excluded majors unless `--include-major` / `-M` is set, and then runs the signal-aware execution flow (rebase → CI wait → approve → merge → post-merge CI wait correlated by merge commit SHA). Without `--admin`, any failed pre-merge check stops execution. With `--admin`, depflow waits for all checks to settle, warns for every failed check, and merges with the GitHub admin override.
 - `depflow version` — prints version and platform
 
 ## Code Patterns
@@ -87,9 +87,11 @@ depflow is a Go 1.25 CLI tool for discovering open Dependabot pull requests, pla
 
 **Rebase strategy:** For PRs behind base, depflow posts a `@dependabot rebase` comment and polls `CompareBranches` until the branch is up to date (replaced the unreliable GitHub `update-branch` API).
 
-**Approval step:** Immediately before merge, depflow submits an unconditional approval review with `gh pr review --approve`. Runtime execution therefore requires an authenticated actor that can both review and merge the target pull request.
+**Approval step:** Immediately before merge, depflow submits an unconditional approval review with `gh pr review --approve`, including when `--admin` is set. Runtime execution therefore requires an authenticated actor that can both review and merge the target pull request.
 
-**Execute flow:** Sequential processing with stop-on-first-failure semantics. `cmd/execute.go` first partitions discovered PRs with `planner.PartitionMajor()`, reports excluded majors when `--include-major` is not set, and returns a no-op message when no eligible PRs remain. For included PRs, after CI and final mergeability/branch-freshness checks, depflow approves the PR, merges it, re-reads the PR to obtain `MergeCommit.OID`, waits for post-merge CI by matching workflow `HeadSHA`, and converts non-context post-merge failures into recorded failed `PRResult` entries returned through `ErrExecutionFailed`. No retry or skip mode.
+**Admin override:** `--admin` changes pre-merge check handling only for `execute`. depflow waits for every check to reach a terminal state, logs a summary warning plus one warning per failed check at warn level so they remain visible without `-v`, and then passes `--admin` to `gh pr merge`. GitHub's available status-check metadata does not distinguish policy gates from ordinary test failures, so admin mode bypasses all failed pre-merge checks.
+
+**Execute flow:** Sequential processing with stop-on-first-failure semantics. `cmd/execute.go` first partitions discovered PRs with `planner.PartitionMajor()`, reports excluded majors when `--include-major` is not set, and returns a no-op message when no eligible PRs remain. For included PRs, depflow rebases if needed, then either fails fast on the first failed pre-merge check or, with `--admin`, waits for all checks to settle before bypassing every failure. After CI and final mergeability/branch-freshness checks, depflow approves the PR, merges it, re-reads the PR to obtain `MergeCommit.OID`, waits for post-merge CI by matching workflow `HeadSHA`, and converts non-context post-merge failures into recorded failed `PRResult` entries returned through `ErrExecutionFailed`. No retry or skip mode.
 
 ## Development Commands
 

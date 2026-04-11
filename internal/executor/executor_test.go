@@ -1,11 +1,13 @@
 package executor
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -29,12 +31,14 @@ type fakeOperator struct {
 	mu             sync.Mutex
 	viewResults    map[int][]githubcli.PRDetail
 	viewErrors     map[int]error
+	viewCalls      []int
 	approveErrors  map[int]error
 	mergeErrors    map[int]error
 	commentErrors  map[int]error
 	runResults     map[string][][]githubcli.WorkflowRun
 	approveCalls   []int
 	mergeCalls     []int
+	mergeAdmin     []bool
 	commentCalls   []commentCall
 	callSequence   []string
 	compareResults []githubcli.BranchComparison
@@ -44,6 +48,8 @@ type fakeOperator struct {
 func (f *fakeOperator) ViewPullRequest(_ context.Context, _ string, number int) (githubcli.PRDetail, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+
+	f.viewCalls = append(f.viewCalls, number)
 
 	if err, ok := f.viewErrors[number]; ok {
 		return githubcli.PRDetail{}, err
@@ -59,12 +65,13 @@ func (f *fakeOperator) ViewPullRequest(_ context.Context, _ string, number int) 
 	return result, nil
 }
 
-func (f *fakeOperator) MergePullRequest(_ context.Context, _ string, number int) error {
+func (f *fakeOperator) MergePullRequest(_ context.Context, _ string, number int, admin bool) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
 	f.callSequence = append(f.callSequence, fmt.Sprintf("merge:%d", number))
 	f.mergeCalls = append(f.mergeCalls, number)
+	f.mergeAdmin = append(f.mergeAdmin, admin)
 	if err, ok := f.mergeErrors[number]; ok {
 		return err
 	}
@@ -340,10 +347,13 @@ func TestRun(t *testing.T) {
 				commentErrors: map[int]error{},
 				viewErrors:    map[int]error{},
 			},
-			wantFailed:      true,
-			wantErr:         true,
-			wantErrIs:       []error{ErrExecutionFailed, ErrCheckFailed},
-			wantFailedErrIs: []error{ErrCheckFailed},
+			wantFailed:       true,
+			wantErr:          true,
+			wantErrIs:        []error{ErrExecutionFailed, ErrCheckFailed},
+			wantFailedErrIs:  []error{ErrCheckFailed},
+			wantApproveCalls: []int{},
+			wantMergeCalls:   []int{},
+			wantCallSequence: []string{},
 		},
 		{
 			name: "merge conflict stops execution",
@@ -611,6 +621,68 @@ func TestRunNilLoggerUsesNoopLogger(t *testing.T) {
 	}
 	if result.Processed[0].Status != statusMerged {
 		t.Fatalf("status: got %s, want %s", result.Processed[0].Status, statusMerged)
+	}
+}
+
+func TestRunAdminOverrideContinuesAfterFailedChecks(t *testing.T) {
+	t.Parallel()
+
+	plan := newTestPlan(
+		dependabot.PR{Number: 1, Title: "bump foo", BaseRef: "main"},
+	)
+
+	op := &fakeOperator{
+		viewResults: map[int][]githubcli.PRDetail{
+			1: {
+				{Number: 1, State: "OPEN", Mergeable: "MERGEABLE", HeadRefName: "feature-1", BaseRefName: "main"},
+				{Number: 1, State: "OPEN", StatusCheckRollup: []githubcli.StatusCheck{{Name: "ci", Conclusion: "failure"}, {Name: "lint", Conclusion: "success"}}},
+				{Number: 1, State: "OPEN", Mergeable: "MERGEABLE", HeadRefName: "feature-1", BaseRefName: "main"},
+			},
+		},
+		compareResults: []githubcli.BranchComparison{
+			{BehindBy: 0},
+			{BehindBy: 0},
+		},
+		runResults:    map[string][][]githubcli.WorkflowRun{},
+		mergeErrors:   map[int]error{},
+		commentErrors: map[int]error{},
+		viewErrors:    map[int]error{},
+	}
+
+	var logBuf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	cfg := testConfig()
+	cfg.Admin = true
+
+	result, err := Run(context.Background(), op, plan, "owner/repo", cfg, log, nopProgress{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result.Merged()) != 1 {
+		t.Fatalf("merged count: got %d, want 1", len(result.Merged()))
+	}
+	if len(op.mergeCalls) != 1 || op.mergeCalls[0] != 1 {
+		t.Fatalf("merge calls: got %v, want [1]", op.mergeCalls)
+	}
+	if len(op.approveCalls) != 1 || op.approveCalls[0] != 1 {
+		t.Fatalf("approve calls: got %v, want [1]", op.approveCalls)
+	}
+	if len(op.mergeAdmin) != 1 || !op.mergeAdmin[0] {
+		t.Fatalf("merge admin flags: got %v, want [true]", op.mergeAdmin)
+	}
+	if len(op.callSequence) != 2 || op.callSequence[0] != "approve:1" || op.callSequence[1] != "merge:1" {
+		t.Fatalf("call sequence: got %v, want [approve:1 merge:1]", op.callSequence)
+	}
+
+	logOutput := logBuf.String()
+	if !strings.Contains(logOutput, "admin override: continuing despite failed CI checks") {
+		t.Fatalf("log output = %q, want admin override summary warning", logOutput)
+	}
+	if !strings.Contains(logOutput, "admin override: bypassed failed check") {
+		t.Fatalf("log output = %q, want per-check admin override warning", logOutput)
+	}
+	if !strings.Contains(logOutput, "check=ci") {
+		t.Fatalf("log output = %q, want failed check name", logOutput)
 	}
 }
 

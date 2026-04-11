@@ -29,7 +29,7 @@ var sleepFunc = func(ctx context.Context, delay time.Duration) error {
 type Operator interface {
 	ViewPullRequest(ctx context.Context, repo string, number int) (githubcli.PRDetail, error)
 	ApprovePullRequest(ctx context.Context, repo string, number int) error
-	MergePullRequest(ctx context.Context, repo string, number int) error
+	MergePullRequest(ctx context.Context, repo string, number int, admin bool) error
 	CommentOnPR(ctx context.Context, repo string, number int, body string) error
 	ListWorkflowRuns(ctx context.Context, repo string, branch string) ([]githubcli.WorkflowRun, error)
 	CompareBranches(ctx context.Context, repo string, base string, head string) (githubcli.BranchComparison, error)
@@ -46,8 +46,9 @@ type nopProgress struct{}
 func (nopProgress) SetStatus(string) {}
 func (nopProgress) Increment()       {}
 
-// Config controls executor polling and timeout behavior.
+// Config controls executor admin override, polling, and timeout behavior.
 type Config struct {
+	Admin            bool
 	PollInterval     time.Duration
 	CheckTimeout     time.Duration
 	PostMergeDelay   time.Duration
@@ -177,12 +178,19 @@ func Run(ctx context.Context, op Operator, plan planner.Plan, repo string, cfg C
 			}
 		}
 
-		if err := waitForChecks(ctx, op, repo, item.PR.Number, cfg, log, progress); err != nil {
+		cr, err := waitForChecks(ctx, op, repo, item.PR.Number, cfg, log, progress)
+		if err != nil {
 			record(item, statusFailed, err, fmt.Sprintf("Failed PR #%d", item.PR.Number))
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				return result, err
 			}
 			return result, executionFailure(item.PR.Number, err)
+		}
+		if len(cr.Failed) > 0 {
+			log.Warn("admin override: continuing despite failed CI checks", "pr", item.PR.Number, "failed_checks", len(cr.Failed))
+			for _, f := range cr.Failed {
+				log.Warn("admin override: bypassed failed check", "pr", item.PR.Number, "check", f.Name, "conclusion", f.Conclusion, "state", f.State)
+			}
 		}
 
 		progress.SetStatus(fmt.Sprintf("Re-checking PR #%d before merge", item.PR.Number))
@@ -216,7 +224,7 @@ func Run(ctx context.Context, op Operator, plan planner.Plan, repo string, cfg C
 		}
 
 		progress.SetStatus(fmt.Sprintf("Merging PR #%d", item.PR.Number))
-		if err := op.MergePullRequest(ctx, repo, item.PR.Number); err != nil {
+		if err := op.MergePullRequest(ctx, repo, item.PR.Number, cfg.Admin); err != nil {
 			record(item, statusFailed, err, fmt.Sprintf("Failed PR #%d", item.PR.Number))
 			return result, fmt.Errorf("merging PR #%d: %w", item.PR.Number, err)
 		}

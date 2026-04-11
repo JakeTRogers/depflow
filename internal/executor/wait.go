@@ -8,6 +8,16 @@ import (
 	"time"
 )
 
+type checkFailure struct {
+	Name       string
+	State      string
+	Conclusion string
+}
+
+type checkResult struct {
+	Failed []checkFailure
+}
+
 func isTerminalFailureConclusion(conclusion string) bool {
 	switch conclusion {
 	case "failure", "cancelled", "timed_out", "action_required", "startup_failure", "stale":
@@ -31,8 +41,9 @@ func resetTimer(timer *time.Timer, delay time.Duration) {
 	timer.Reset(delay)
 }
 
-// waitForChecks polls ViewPullRequest until all status checks pass or fails/times out.
-func waitForChecks(ctx context.Context, op Operator, repo string, number int, cfg Config, log *slog.Logger, progress Progress) error {
+// waitForChecks polls ViewPullRequest until all status checks pass, a non-admin failure is observed,
+// admin-mode checks settle with failures, or the wait times out.
+func waitForChecks(ctx context.Context, op Operator, repo string, number int, cfg Config, log *slog.Logger, progress Progress) (checkResult, error) {
 	progress.SetStatus(fmt.Sprintf("Waiting for CI on PR #%d", number))
 
 	parentCtx := ctx
@@ -47,21 +58,23 @@ func waitForChecks(ctx context.Context, op Operator, repo string, number int, cf
 		detail, err := op.ViewPullRequest(ctx, repo, number)
 		if err != nil {
 			if parentErr := parentCtx.Err(); parentErr != nil {
-				return parentErr
+				return checkResult{}, parentErr
 			}
 			if ctx.Err() != nil {
-				return fmt.Errorf("PR #%d: %w", number, ErrCheckTimeout)
+				return checkResult{}, fmt.Errorf("PR #%d: %w", number, ErrCheckTimeout)
 			}
-			return fmt.Errorf("polling checks for PR #%d: %w", number, err)
+			return checkResult{}, fmt.Errorf("polling checks for PR #%d: %w", number, err)
 		}
 
 		checks := detail.StatusCheckRollup
 		if len(checks) == 0 {
 			log.Info("no CI checks configured, proceeding", "number", number)
-			return nil
+			return checkResult{}, nil
 		}
 
-		allPassed := true
+		allTerminal := true
+		result := checkResult{}
+		hasFailed := false
 		for _, c := range checks {
 			conclusion := strings.ToLower(c.Conclusion)
 			state := strings.ToLower(c.State)
@@ -71,17 +84,34 @@ func waitForChecks(ctx context.Context, op Operator, repo string, number int, cf
 				if name == "" {
 					name = c.Context
 				}
-				return fmt.Errorf("check %q failed for PR #%d: %w", name, number, ErrCheckFailed)
+
+				failure := checkFailure{
+					Name:       name,
+					State:      state,
+					Conclusion: conclusion,
+				}
+				if !cfg.Admin {
+					result.Failed = []checkFailure{failure}
+					return result, fmt.Errorf("check %q failed for PR #%d: %w", failure.Name, number, ErrCheckFailed)
+				}
+
+				result.Failed = append(result.Failed, failure)
+				hasFailed = true
+				continue
 			}
 
 			if conclusion != "success" && conclusion != "neutral" && conclusion != "skipped" && state != "success" {
-				allPassed = false
+				allTerminal = false
 			}
 		}
 
-		if allPassed {
+		if allTerminal {
+			if hasFailed {
+				return result, nil
+			}
+
 			log.Info("all checks passed", "number", number)
-			return nil
+			return checkResult{}, nil
 		}
 
 		log.Debug("checks still pending, waiting", "number", number, "interval", cfg.PollInterval)
@@ -89,9 +119,9 @@ func waitForChecks(ctx context.Context, op Operator, repo string, number int, cf
 
 		select {
 		case <-parentCtx.Done():
-			return parentCtx.Err()
+			return checkResult{}, parentCtx.Err()
 		case <-ctx.Done():
-			return fmt.Errorf("PR #%d: %w", number, ErrCheckTimeout)
+			return checkResult{}, fmt.Errorf("PR #%d: %w", number, ErrCheckTimeout)
 		case <-timer.C:
 		}
 	}

@@ -7,13 +7,16 @@ import (
 )
 
 // MergePullRequest merge-commits the PR and deletes the head branch.
-func (c *client) MergePullRequest(ctx context.Context, repo string, number int) error {
+func (c *client) MergePullRequest(ctx context.Context, repo string, number int, admin bool) error {
 	args := []string{
 		"pr",
 		"merge",
 		strconv.Itoa(number),
 		"--merge",
 		"--delete-branch",
+	}
+	if admin {
+		args = append(args, "--admin")
 	}
 	if repo != "" {
 		args = append(args, "--repo", repo)

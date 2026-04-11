@@ -31,6 +31,7 @@ type fakeExecuteOperator struct {
 	comparedRepos  []string
 	approvedRepos  []string
 	mergedRepos    []string
+	mergedAdmins   []bool
 	viewResults    []githubcli.PRDetail
 	compareResults []githubcli.BranchComparison
 	runResults     map[string][][]githubcli.WorkflowRun
@@ -58,8 +59,9 @@ func (f *fakeExecuteOperator) ViewPullRequest(_ context.Context, repo string, nu
 	}, nil
 }
 
-func (f *fakeExecuteOperator) MergePullRequest(_ context.Context, repo string, _ int) error {
+func (f *fakeExecuteOperator) MergePullRequest(_ context.Context, repo string, _ int, admin bool) error {
 	f.mergedRepos = append(f.mergedRepos, repo)
+	f.mergedAdmins = append(f.mergedAdmins, admin)
 	return nil
 }
 
@@ -303,6 +305,76 @@ func TestExecuteCommandDryRunPrintsPlanWithoutResolvingRepoOrExecuting(t *testin
 	}
 	if len(operator.viewedRepos) != 0 || len(operator.comparedRepos) != 0 || len(operator.approvedRepos) != 0 || len(operator.mergedRepos) != 0 {
 		t.Fatalf("executor should not run in dry-run mode: viewed=%v compared=%v approved=%v merged=%v", operator.viewedRepos, operator.comparedRepos, operator.approvedRepos, operator.mergedRepos)
+	}
+}
+
+func TestExecuteCommandAdminFlagPassesAdminOverrideToMerge(t *testing.T) {
+	t.Parallel()
+
+	lister := &fakeLister{
+		pullRequests: []githubcli.PullRequest{{
+			Number:      42,
+			Title:       "Bump lodash from 4.17.20 to 4.17.21",
+			URL:         "https://example.test/pr/42",
+			Author:      githubcli.PullRequestAuthor{Login: "dependabot[bot]"},
+			Labels:      []githubcli.PullRequestLabel{{Name: "dependencies"}},
+			HeadRefName: "dependabot/npm_and_yarn/lodash-4.17.21",
+			BaseRefName: "main",
+		}},
+	}
+	operator := &fakeExecuteOperator{
+		viewResults: []githubcli.PRDetail{
+			{
+				Number:      42,
+				Title:       "Bump lodash from 4.17.20 to 4.17.21",
+				State:       "OPEN",
+				Mergeable:   "MERGEABLE",
+				HeadRefName: "dependabot/npm_and_yarn/lodash-4.17.21",
+				BaseRefName: "main",
+			},
+			{
+				Number:      42,
+				Title:       "Bump lodash from 4.17.20 to 4.17.21",
+				State:       "OPEN",
+				Mergeable:   "MERGEABLE",
+				HeadRefName: "dependabot/npm_and_yarn/lodash-4.17.21",
+				BaseRefName: "main",
+				StatusCheckRollup: []githubcli.StatusCheck{{
+					Name:       "ci",
+					Conclusion: "failure",
+				}},
+			},
+			{
+				Number:      42,
+				Title:       "Bump lodash from 4.17.20 to 4.17.21",
+				State:       "OPEN",
+				Mergeable:   "MERGEABLE",
+				HeadRefName: "dependabot/npm_and_yarn/lodash-4.17.21",
+				BaseRefName: "main",
+			},
+		},
+		compareResults: []githubcli.BranchComparison{{BehindBy: 0}, {BehindBy: 0}},
+	}
+
+	cmd := newRootCommand(commandDeps{
+		lister:   lister,
+		operator: operator,
+		resolver: &fakeRepoResolver{repo: "owner/repo"},
+	})
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	cmd.SetArgs([]string{"execute", "--admin"})
+	cmd.SetOut(stdout)
+	cmd.SetErr(stderr)
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if len(operator.mergedAdmins) != 1 || !operator.mergedAdmins[0] {
+		t.Fatalf("merge admin flags = %v, want [true]", operator.mergedAdmins)
+	}
+	if !strings.Contains(stdout.String(), "#42 Bump lodash from 4.17.20 to 4.17.21 — merged") {
+		t.Fatalf("stdout = %q, want merged execution summary", stdout.String())
 	}
 }
 

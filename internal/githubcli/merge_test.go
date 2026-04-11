@@ -14,7 +14,7 @@ func TestMergePullRequest(t *testing.T) {
 	executor := &stubExecutor{}
 	client := newClient(executor)
 
-	err := client.MergePullRequest(context.Background(), "", 42)
+	err := client.MergePullRequest(context.Background(), "", 42, false)
 	if err != nil {
 		t.Fatalf("MergePullRequest() error = %v", err)
 	}
@@ -40,7 +40,7 @@ func TestMergePullRequestWithRepo(t *testing.T) {
 	executor := &stubExecutor{}
 	client := newClient(executor)
 
-	err := client.MergePullRequest(context.Background(), "owner/repo", 42)
+	err := client.MergePullRequest(context.Background(), "owner/repo", 42, false)
 	if err != nil {
 		t.Fatalf("MergePullRequest() error = %v", err)
 	}
@@ -62,12 +62,41 @@ func TestMergePullRequestWithRepo(t *testing.T) {
 	}
 }
 
+func TestMergePullRequestWithAdminAndRepo(t *testing.T) {
+	t.Parallel()
+
+	executor := &stubExecutor{}
+	client := newClient(executor)
+
+	err := client.MergePullRequest(context.Background(), "owner/repo", 42, true)
+	if err != nil {
+		t.Fatalf("MergePullRequest() error = %v", err)
+	}
+
+	wantArgs := []string{
+		"pr",
+		"merge",
+		"42",
+		"--merge",
+		"--delete-branch",
+		"--admin",
+		"--repo",
+		"owner/repo",
+	}
+	if len(executor.calls) != 1 {
+		t.Fatalf("len(calls) = %d, want 1", len(executor.calls))
+	}
+	if !reflect.DeepEqual(executor.calls[0], wantArgs) {
+		t.Fatalf("args = %#v, want %#v", executor.calls[0], wantArgs)
+	}
+}
+
 func TestMergePullRequestWrapsErrors(t *testing.T) {
 	t.Parallel()
 
 	client := newClient(&stubExecutor{err: errors.New("boom")})
 
-	err := client.MergePullRequest(context.Background(), "", 42)
+	err := client.MergePullRequest(context.Background(), "", 42, false)
 	if err == nil {
 		t.Fatal("MergePullRequest() error = nil, want non-nil")
 	}
