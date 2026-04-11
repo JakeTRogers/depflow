@@ -1,3 +1,9 @@
+## v1.2.0 (2026-04-11)
+
+### Feat
+
+- **execute**: add --admin flag to bypass branch protection rules
+
 ## v1.1.0 (2026-03-30)
 
 ### Feat
