@@ -17,6 +17,7 @@ import (
 type executeOptions struct {
 	dryRun           bool
 	includeMajor     bool
+	admin            bool
 	pollInterval     time.Duration
 	checkTimeout     time.Duration
 	postMergeDelay   time.Duration
@@ -81,6 +82,7 @@ func newExecuteCommand(deps commandDeps, opts *commandOptions) *cobra.Command {
 			}
 
 			cfg := executor.Config{
+				Admin:            execOpts.admin,
 				PollInterval:     execOpts.pollInterval,
 				CheckTimeout:     execOpts.checkTimeout,
 				PostMergeDelay:   execOpts.postMergeDelay,
@@ -111,6 +113,7 @@ func newExecuteCommand(deps commandDeps, opts *commandOptions) *cobra.Command {
 
 	cmd.Flags().BoolVar(&execOpts.dryRun, "dry-run", false, "show planned order without executing")
 	cmd.Flags().BoolVarP(&execOpts.includeMajor, "include-major", "M", false, "include major version updates in execution")
+	cmd.Flags().BoolVar(&execOpts.admin, "admin", false, "bypass branch protection rules using GitHub admin privileges")
 	cmd.Flags().DurationVar(&execOpts.pollInterval, "poll-interval", 30*time.Second, "CI status polling interval")
 	cmd.Flags().DurationVar(&execOpts.checkTimeout, "check-timeout", 30*time.Minute, "maximum wait for CI checks per PR")
 	cmd.Flags().DurationVar(&execOpts.postMergeDelay, "post-merge-delay", 10*time.Second, "delay before checking post-merge CI")

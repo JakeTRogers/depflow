@@ -31,6 +31,8 @@ Processes Dependabot PRs in planned order with a live progress display. By defau
 - Waits for post-merge CI for the merged commit on the base branch before proceeding to the next PR
 - Stops on first failure (no retry or skip mode) and exits non-zero if any PR fails to process
 
+Without `--admin`, any failed pre-merge check stops execution. With `--admin`, depflow waits for all pre-merge checks to reach a terminal state, logs a summary warning plus one warning per failed check, then continues with approval and an admin merge. The flag is forwarded as `gh pr merge --admin`, which bypasses branch protection rules. Because GitHub's status-check metadata does not distinguish policy gates from ordinary test failures, `--admin` bypasses all failed pre-merge checks. These admin-bypass warnings are emitted at warn level, so they remain visible even without `-v`.
+
 Execute renders a live two-line progress tracker on stderr (powered by mpb) and writes any enabled logs above the progress display. The final execution summary is printed to stdout.
 If the process receives `SIGINT` or `SIGTERM`, depflow cancels the active execution context so waits and polling loops can stop promptly.
 
@@ -38,6 +40,7 @@ If the process receives `SIGINT` or `SIGTERM`, depflow cancels the active execut
 
 - `--dry-run` — show planned order without executing
 - `-M, --include-major` — include major version updates in execution
+- `--admin` — bypass branch protection rules using GitHub admin privileges
 - `--poll-interval` — CI status polling interval (default: 30s, minimum: 5s)
 - `--check-timeout` — maximum wait for CI checks per PR (default: 30m, must be greater than `--poll-interval`)
 - `--post-merge-delay` — delay before checking post-merge CI (default: 10s)

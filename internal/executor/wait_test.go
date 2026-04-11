@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"os"
+	"reflect"
 	"testing"
 	"time"
 
@@ -15,10 +16,11 @@ func TestWaitForChecks(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name      string
-		op        *fakeOperator
-		wantErr   bool
-		wantErrIs error
+		name       string
+		op         *fakeOperator
+		wantErr    bool
+		wantErrIs  error
+		wantFailed []checkFailure
 	}{
 		{
 			name: "checks pass immediately",
@@ -48,8 +50,9 @@ func TestWaitForChecks(t *testing.T) {
 				commentErrors: map[int]error{},
 				runResults:    map[string][][]githubcli.WorkflowRun{},
 			},
-			wantErr:   true,
-			wantErrIs: ErrCheckFailed,
+			wantErr:    true,
+			wantErrIs:  ErrCheckFailed,
+			wantFailed: []checkFailure{{Name: "ci", Conclusion: "failure"}},
 		},
 		{
 			name: "no checks configured",
@@ -72,7 +75,7 @@ func TestWaitForChecks(t *testing.T) {
 			ctx := context.Background()
 			log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 
-			err := waitForChecks(ctx, tc.op, "owner/repo", 1, testConfig(), log, nopProgress{})
+			result, err := waitForChecks(ctx, tc.op, "owner/repo", 1, testConfig(), log, nopProgress{})
 
 			if tc.wantErr && err == nil {
 				t.Fatal("expected error, got nil")
@@ -83,11 +86,14 @@ func TestWaitForChecks(t *testing.T) {
 			if tc.wantErrIs != nil && !errors.Is(err, tc.wantErrIs) {
 				t.Errorf("error: got %v, want %v", err, tc.wantErrIs)
 			}
+			if !reflect.DeepEqual(result.Failed, tc.wantFailed) {
+				t.Errorf("failed checks: got %#v, want %#v", result.Failed, tc.wantFailed)
+			}
 		})
 	}
 }
 
-func TestWaitForChecksTerminalFailureConclusions(t *testing.T) {
+func TestWaitForChecksTerminalFailureConclusionsReturnErrCheckFailed(t *testing.T) {
 	t.Parallel()
 
 	for _, conclusion := range []string{"failure", "cancelled", "timed_out", "action_required", "startup_failure", "stale"} {
@@ -109,11 +115,83 @@ func TestWaitForChecksTerminalFailureConclusions(t *testing.T) {
 			}
 
 			log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-			err := waitForChecks(context.Background(), op, "owner/repo", 1, testConfig(), log, nopProgress{})
+			result, err := waitForChecks(context.Background(), op, "owner/repo", 1, testConfig(), log, nopProgress{})
 			if !errors.Is(err, ErrCheckFailed) {
 				t.Fatalf("error for %q: got %v, want %v", conclusion, err, ErrCheckFailed)
 			}
+			want := checkFailure{Name: "ci", Conclusion: conclusion}
+			if !reflect.DeepEqual(result.Failed, []checkFailure{want}) {
+				t.Fatalf("result for %q: got %#v, want %#v", conclusion, result.Failed, []checkFailure{want})
+			}
 		})
+	}
+}
+
+func TestWaitForChecksAdminCollectsFailuresAfterAllChecksSettle(t *testing.T) {
+	t.Parallel()
+
+	op := &fakeOperator{
+		viewResults: map[int][]githubcli.PRDetail{
+			1: {
+				{Number: 1, State: "OPEN", StatusCheckRollup: []githubcli.StatusCheck{{Context: "ci/context", Conclusion: "failure"}, {Name: "lint", State: "pending"}}},
+				{Number: 1, State: "OPEN", StatusCheckRollup: []githubcli.StatusCheck{{Context: "ci/context", Conclusion: "failure"}, {Name: "lint", Conclusion: "cancelled"}}},
+			},
+		},
+		viewErrors:    map[int]error{},
+		mergeErrors:   map[int]error{},
+		commentErrors: map[int]error{},
+		runResults:    map[string][][]githubcli.WorkflowRun{},
+	}
+
+	cfg := testConfig()
+	cfg.Admin = true
+	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	result, err := waitForChecks(context.Background(), op, "owner/repo", 1, cfg, log, nopProgress{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	want := []checkFailure{
+		{Name: "ci/context", Conclusion: "failure"},
+		{Name: "lint", Conclusion: "cancelled"},
+	}
+	if !reflect.DeepEqual(result.Failed, want) {
+		t.Fatalf("failed checks: got %#v, want %#v", result.Failed, want)
+	}
+	if remaining := len(op.viewResults[1]); remaining != 0 {
+		t.Fatalf("remaining polls = %d, want 0 after waiting for checks to settle", remaining)
+	}
+}
+
+func TestWaitForChecksNonAdminFailsFastOnFirstFailure(t *testing.T) {
+	t.Parallel()
+
+	op := &fakeOperator{
+		viewResults: map[int][]githubcli.PRDetail{
+			1: {{Number: 1, State: "OPEN", StatusCheckRollup: []githubcli.StatusCheck{{Name: "ci", Conclusion: "failure"}, {Name: "lint"}}}},
+		},
+		viewErrors:    map[int]error{},
+		mergeErrors:   map[int]error{},
+		commentErrors: map[int]error{},
+		runResults:    map[string][][]githubcli.WorkflowRun{},
+	}
+
+	cfg := testConfig()
+	cfg.Admin = false
+	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	result, err := waitForChecks(context.Background(), op, "owner/repo", 1, cfg, log, nopProgress{})
+	if !errors.Is(err, ErrCheckFailed) {
+		t.Fatalf("error: got %v, want %v", err, ErrCheckFailed)
+	}
+
+	want := []checkFailure{{Name: "ci", Conclusion: "failure"}}
+	if !reflect.DeepEqual(result.Failed, want) {
+		t.Fatalf("failed checks: got %#v, want %#v", result.Failed, want)
+	}
+	if len(op.viewCalls) != 1 || op.viewCalls[0] != 1 {
+		t.Fatalf("view calls: got %v, want [1]", op.viewCalls)
 	}
 }
 
@@ -144,7 +222,7 @@ func TestWaitForChecksTimeoutReturnsErrCheckTimeout(t *testing.T) {
 
 	cfg := Config{PollInterval: time.Millisecond, CheckTimeout: 5 * time.Millisecond}
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	err := waitForChecks(context.Background(), op, "owner/repo", 1, cfg, log, nopProgress{})
+	_, err := waitForChecks(context.Background(), op, "owner/repo", 1, cfg, log, nopProgress{})
 	if !errors.Is(err, ErrCheckTimeout) {
 		t.Fatalf("error: got %v, want %v", err, ErrCheckTimeout)
 	}
@@ -167,7 +245,7 @@ func TestWaitForChecksParentCancellationReturnsContextError(t *testing.T) {
 	}
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	err := waitForChecks(ctx, op, "owner/repo", 1, testConfig(), log, nopProgress{})
+	_, err := waitForChecks(ctx, op, "owner/repo", 1, testConfig(), log, nopProgress{})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("error: got %v, want %v", err, context.Canceled)
 	}

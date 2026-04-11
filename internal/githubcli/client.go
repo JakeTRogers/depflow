@@ -73,7 +73,7 @@ type Client interface {
 	ListOpenPullRequests(ctx context.Context, repo string, limit int) ([]PullRequest, error)
 	ViewPullRequest(ctx context.Context, repo string, number int) (PRDetail, error)
 	ApprovePullRequest(ctx context.Context, repo string, number int) error
-	MergePullRequest(ctx context.Context, repo string, number int) error
+	MergePullRequest(ctx context.Context, repo string, number int, admin bool) error
 	CommentOnPR(ctx context.Context, repo string, number int, body string) error
 	ListWorkflowRuns(ctx context.Context, repo string, branch string) ([]WorkflowRun, error)
 	CompareBranches(ctx context.Context, repo string, base string, head string) (BranchComparison, error)

@@ -16,8 +16,8 @@ func TestFromCountAndLevel(t *testing.T) {
 		wantVerb  Verbosity
 		wantLevel slog.Level
 	}{
-		{"negative", -1, Quiet, slog.LevelError + 1},
-		{"zero", 0, Quiet, slog.LevelError + 1},
+		{"negative", -1, Quiet, slog.LevelWarn},
+		{"zero", 0, Quiet, slog.LevelWarn},
 		{"one", 1, Info, slog.LevelInfo},
 		{"two", 2, Debug, slog.LevelDebug},
 		{"three", 3, Trace, levelTrace},
@@ -39,18 +39,25 @@ func TestFromCountAndLevel(t *testing.T) {
 	}
 }
 
-func TestNewLoggerQuietSuppressesOutput(t *testing.T) {
+func TestNewLoggerQuietShowsWarningsAndErrorsOnly(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
 	log := NewLogger(&buf, Quiet)
 
 	log.Info("should not appear")
-	log.Warn("also hidden")
-	log.Error("even errors hidden")
+	log.Warn("visible warning")
+	log.Error("visible error")
 
-	if buf.Len() != 0 {
-		t.Errorf("quiet logger produced output: %q", buf.String())
+	out := buf.String()
+	if contains(out, "should not appear") {
+		t.Errorf("info message visible in quiet mode: %q", out)
+	}
+	if !contains(out, "visible warning") {
+		t.Errorf("warning message missing in quiet mode: %q", out)
+	}
+	if !contains(out, "visible error") {
+		t.Errorf("error message missing in quiet mode: %q", out)
 	}
 }
 

@@ -16,7 +16,7 @@ const levelTrace slog.Level = -8
 type Verbosity int
 
 const (
-	// Quiet suppresses all logger output.
+	// Quiet shows warning and error log messages only.
 	Quiet Verbosity = 0
 	// Info shows info and higher-severity log messages.
 	Info Verbosity = 1
@@ -40,7 +40,7 @@ func FromCount(n int) Verbosity {
 func (v Verbosity) level() slog.Level {
 	switch v {
 	case Quiet:
-		return slog.LevelError + 1
+		return slog.LevelWarn
 	case Info:
 		return slog.LevelInfo
 	case Debug:
@@ -51,11 +51,7 @@ func (v Verbosity) level() slog.Level {
 }
 
 // NewLogger creates a logger configured for the given verbosity.
-// In quiet mode the logger writes to io.Discard.
 func NewLogger(w io.Writer, v Verbosity) *slog.Logger {
-	if v == Quiet {
-		w = io.Discard
-	}
 	return slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{
 		Level: v.level(),
 	}))
