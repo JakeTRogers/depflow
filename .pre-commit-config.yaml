@@ -12,7 +12,7 @@ repos:
       - id: trailing-whitespace
         args: [ --markdown-linebreak-ext=md ]
   - repo: https://github.com/golangci/golangci-lint
-    rev: 8f3b0c7ed018e57905fbd873c697e0b1ede605a5  # frozen: v2.11.4
+    rev: 076ef9ccc04c5fc0e8947be6ca45f1d76f0e17b9  # frozen: v1
     hooks:
       - id: golangci-lint-full
   - repo: local
