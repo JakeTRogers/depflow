@@ -1,3 +1,9 @@
+## v1.2.1 (2026-06-21)
+
+### Fix
+
+- **deps**: bump github.com/vbauerster/mpb/v8 from 8.12.0 to 8.12.1
+
 ## v1.2.0 (2026-04-11)
 
 ### Feat
