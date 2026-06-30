@@ -130,6 +130,22 @@ func (c Classification) HasMajorVersionBump() bool {
 	return c.ChangeKind == ChangeMajor || c.ContainsMajorUpdate
 }
 
+// ParseChangeKind parses a case-insensitive --change-kind flag value into a ChangeKind.
+func ParseChangeKind(value string) (ChangeKind, bool) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "patch":
+		return ChangePatch, true
+	case "minor":
+		return ChangeMinor, true
+	case "major":
+		return ChangeMajor, true
+	case "unknown":
+		return ChangeUnknown, true
+	default:
+		return "", false
+	}
+}
+
 func classify(title, body, headRef string, labels []string) Classification {
 	ecosystem := inferEcosystem(headRef, title, labels)
 	dependencyName := inferDependencyName(title, headRef, ecosystem)

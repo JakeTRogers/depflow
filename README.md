@@ -4,23 +4,38 @@ depflow is a Go CLI tool for discovering open Dependabot pull requests, planning
 
 ## Commands
 
-By default, `plan` and `execute` exclude major version updates; pass `--include-major` or `-M` to include them.
+By default, `plan` and `execute` exclude major version updates and draft PRs; use `--change-kind` and `--include-drafts` to change that. `scan` is a pure visibility tool and always shows every open Dependabot PR regardless of change-kind or draft state, though it still honors the shared classification filters described below.
+
+### Filtering
+
+`scan`, `plan`, and `execute` share a set of classification-based filters built from the same signals shown by `scan` (ecosystem, dependency name, labels, grouping):
+
+- `--ecosystem` / `--exclude-ecosystem` — allow-list / deny-list by ecosystem (repeatable or comma-separated)
+- `--dependency` / `--exclude-dependency` — allow-list / deny-list by substring match against the dependency name (repeatable or comma-separated, case-insensitive)
+- `--require-label` — only include PRs that have **all** of the given labels (repeatable or comma-separated)
+- `--exclude-label` — exclude PRs that have **any** of the given labels (repeatable or comma-separated)
+- `--skip-grouped` — exclude grouped Dependabot updates
+
+These default to no restriction (everything passes) and apply identically across all three commands, so you can preview a filtered subset with `scan`/`plan` before running the same filters through `execute`.
+
+`plan` and `execute` additionally accept:
+
+- `--change-kind` — include only these change kinds: `patch`, `minor`, `major`, `unknown`, or `all` (repeatable or comma-separated; default: `patch,minor,unknown`, i.e. major updates excluded). Grouped PRs whose body contains a major version bump are treated as `major` for this filter.
+- `--include-drafts` — include draft Dependabot PRs (default: excluded)
+
+PRs excluded by any filter are listed with their specific reason under an `Excluded by filters` section (for `plan`/`execute`); `scan` filters silently since it's a visibility tool, not a queue.
 
 ### scan
 
-Lists open Dependabot pull requests with metadata including classification signals: ecosystem, change kind, grouping, developer tooling, and infrastructure sensitivity. `scan` is unchanged by major filtering and still shows major updates.
+Lists open Dependabot pull requests with metadata including classification signals: ecosystem, change kind, grouping, developer tooling, and infrastructure sensitivity.
 
 ### plan
 
-Shows deterministic classification and the preferred processing order. By default, `plan` excludes major version Dependabot PRs from the planned queue and lists them separately under `Excluded major updates`; use `--include-major` or `-M` to include them again. Grouped summary PRs are also treated as major when their PR body contains a major version bump. Included PRs are sorted into buckets — ci, developer-tooling, patch, minor, grouped, unknown, infra-sensitive, major — so that lower-risk updates are processed first.
-
-#### Plan Flags
-
-- `-M, --include-major` — include major version updates in the planned order
+Shows deterministic classification and the preferred processing order. By default, `plan` excludes major version updates and drafts from the planned queue and lists them separately under `Excluded by filters` along with the reason each was excluded. Grouped summary PRs are also treated as major when their PR body contains a major version bump. Included PRs are sorted into buckets — ci, developer-tooling, patch, minor, grouped, unknown, infra-sensitive, major — so that lower-risk updates are processed first.
 
 ### execute
 
-Processes Dependabot PRs in planned order with a live progress display. By default, `execute` excludes major version updates, reports them before execution, and only processes the remaining queue; use `--include-major` or `-M` to include them again. If every discovered PR is excluded, the command exits without mutating anything and prints `Nothing to do after excluding major updates.`. For each included PR the command:
+Processes Dependabot PRs in planned order with a live progress display. By default, `execute` excludes major version updates and drafts, reports them before execution, and only processes the remaining queue. If every discovered PR is excluded, the command exits without mutating anything and prints `Nothing to do after applying filters.`. For each included PR the command:
 
 - Inspects PR state and branch comparison
 - Posts a `@dependabot rebase` comment and polls until the branch is updated if it is behind base
@@ -39,7 +54,8 @@ If the process receives `SIGINT` or `SIGTERM`, depflow cancels the active execut
 #### Execute Flags
 
 - `--dry-run` — show planned order without executing
-- `-M, --include-major` — include major version updates in execution
+- `--change-kind` — include only these change kinds in execution (default: `patch,minor,unknown`)
+- `--include-drafts` — include draft Dependabot PRs in execution
 - `--admin` — bypass branch protection rules using GitHub admin privileges
 - `--poll-interval` — CI status polling interval (default: 30s, minimum: 5s)
 - `--check-timeout` — maximum wait for CI checks per PR (default: 30m, must be greater than `--poll-interval`)
@@ -61,14 +77,15 @@ depflow 0.1.0 (linux/amd64)
 ## Global Flags
 
 - `--repo [HOST/]OWNER/REPO` — target an explicit GitHub repository; if omitted, `gh` attempts to infer the current repository and `execute` resolves that repo before mutating operations
-- `--limit N` — maximum number of Dependabot pull requests to return after filtering (default: 100). Discovery expands the underlying open-PR query as needed, capped at 1000 pull requests before filtering.
+- `--limit N` — maximum number of eligible Dependabot pull requests to return after classification filtering (default: 100). Discovery expands the underlying open-PR query as needed, capped at 1000 pull requests, so PRs filtered out do not count against the limit.
 - `-v, --verbose` — increase execute log verbosity (`-v` for info, `-vv` for debug, `-vvv` for trace)
+- `--ecosystem`, `--exclude-ecosystem`, `--dependency`, `--exclude-dependency`, `--require-label`, `--exclude-label`, `--skip-grouped` — see [Filtering](#filtering); shared by `scan`, `plan`, and `execute`
 
 ## Output Conventions
 
 - GitHub-derived strings printed by `scan`, `plan`, execute dry-run output, execution summaries, the live progress line (including `--show-checks` check and workflow run names), and top-level error output are sanitized to strip terminal control bytes before being written to the terminal.
 - `scan`, `plan`, and `execute` print `No open Dependabot pull requests found.` when no Dependabot PRs are discovered.
-- With default major filtering enabled, `plan` lists excluded major PRs separately and `execute` prints `Nothing to do after excluding major updates.` when no eligible PRs remain.
+- With default filtering enabled, `plan` and `execute` list excluded PRs (and why) under `Excluded by filters`, and `execute` prints `Nothing to do after applying filters.` when no eligible PRs remain.
 - When repository inference fails and `--repo` was omitted, depflow includes a rerun hint using `--repo OWNER/REPO`.
 
 ## Prerequisites
@@ -91,9 +108,11 @@ depflow 0.1.0 (linux/amd64)
 depflow scan
 depflow --repo owner/repo --limit 25 scan
 depflow --repo owner/repo plan
-depflow --repo owner/repo plan -M
+depflow --repo owner/repo plan --change-kind=all
+depflow --repo owner/repo plan --ecosystem npm-and-yarn --skip-grouped
 depflow --repo owner/repo execute --dry-run
-depflow --repo owner/repo execute --dry-run -M
+depflow --repo owner/repo execute --dry-run --change-kind=all
+depflow --repo owner/repo execute --exclude-label do-not-merge --require-label dependencies
 depflow -v --repo owner/repo execute
 depflow -vv --repo owner/repo execute --poll-interval 15s --check-timeout 10m
 depflow --repo owner/repo execute --show-checks --show-timing

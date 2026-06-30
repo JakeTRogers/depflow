@@ -32,9 +32,16 @@ type commandDeps struct {
 }
 
 type commandOptions struct {
-	repo      string
-	limit     int
-	verbosity int
+	repo                string
+	limit               int
+	verbosity           int
+	ecosystems          []string
+	excludeEcosystems   []string
+	dependencies        []string
+	excludeDependencies []string
+	requireLabels       []string
+	excludeLabels       []string
+	skipGrouped         bool
 }
 
 const defaultPullRequestLimit = 100
@@ -65,6 +72,13 @@ func newRootCommand(deps commandDeps) *cobra.Command {
 	cmd.PersistentFlags().StringVar(&opts.repo, "repo", "", "GitHub repository in [HOST/]OWNER/REPO format")
 	cmd.PersistentFlags().IntVar(&opts.limit, "limit", defaultPullRequestLimit, "maximum number of Dependabot pull requests to return after filtering")
 	cmd.PersistentFlags().CountVarP(&opts.verbosity, "verbose", "v", "increase log verbosity (-v info, -vv debug, -vvv trace)")
+	cmd.PersistentFlags().StringSliceVar(&opts.ecosystems, "ecosystem", nil, "only include PRs from these ecosystems (repeatable or comma-separated)")
+	cmd.PersistentFlags().StringSliceVar(&opts.excludeEcosystems, "exclude-ecosystem", nil, "exclude PRs from these ecosystems (repeatable or comma-separated)")
+	cmd.PersistentFlags().StringSliceVar(&opts.dependencies, "dependency", nil, "only include PRs whose dependency name contains one of these substrings (repeatable or comma-separated)")
+	cmd.PersistentFlags().StringSliceVar(&opts.excludeDependencies, "exclude-dependency", nil, "exclude PRs whose dependency name contains one of these substrings (repeatable or comma-separated)")
+	cmd.PersistentFlags().StringSliceVar(&opts.requireLabels, "require-label", nil, "only include PRs that have all of these labels (repeatable or comma-separated)")
+	cmd.PersistentFlags().StringSliceVar(&opts.excludeLabels, "exclude-label", nil, "exclude PRs that have any of these labels (repeatable or comma-separated)")
+	cmd.PersistentFlags().BoolVar(&opts.skipGrouped, "skip-grouped", false, "exclude grouped Dependabot updates")
 
 	cmd.AddCommand(newScanCommand(deps, opts))
 	cmd.AddCommand(newPlanCommand(deps, opts))

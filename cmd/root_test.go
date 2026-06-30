@@ -227,7 +227,7 @@ func TestPlanCommandOrdersPRs(t *testing.T) {
 	if !strings.Contains(stdout, "reason: grouped update sorts after simple low-risk updates") {
 		t.Fatalf("plan output missing grouped rationale: %q", stdout)
 	}
-	if strings.Contains(stdout, "Excluded major updates") {
+	if strings.Contains(stdout, "Excluded by filters") {
 		t.Fatalf("plan output should not render excluded section when no major PRs exist: %q", stdout)
 	}
 	if !strings.Contains(stdout, "signals: ecosystem=npm-and-yarn change=unknown grouped=yes dev-tooling=no infra-sensitive=no") {
@@ -265,7 +265,7 @@ func TestPlanCommandGroupedSummaryWithoutParseableVersionsRemainsIncluded(t *tes
 	if !strings.Contains(stdout, "1. #13 [grouped] Bump the npm_and_yarn group with 2 updates") {
 		t.Fatalf("plan output missing included grouped summary PR: %q", stdout)
 	}
-	if strings.Contains(stdout, "Excluded major updates") {
+	if strings.Contains(stdout, "Excluded by filters") {
 		t.Fatalf("plan output should not exclude grouped summaries without parseable versions: %q", stdout)
 	}
 	if strings.Contains(stdout, noOpenDependabotPRsMessage) {
@@ -311,7 +311,7 @@ func TestPlanCommandExcludesMajorUpdatesByDefault(t *testing.T) {
 	if !strings.Contains(stdout, "1. #1 [ci] Bump actions/cache from 4.2.0 to 4.2.1") {
 		t.Fatalf("plan output missing included PR: %q", stdout)
 	}
-	if !strings.Contains(stdout, "Excluded major updates (1):") {
+	if !strings.Contains(stdout, "Excluded by filters (1):") {
 		t.Fatalf("plan output missing excluded section: %q", stdout)
 	}
 	if !strings.Contains(stdout, "#9 Bump the npm_and_yarn group with 2 updates") {
@@ -319,7 +319,7 @@ func TestPlanCommandExcludesMajorUpdatesByDefault(t *testing.T) {
 	}
 }
 
-func TestPlanCommandIncludeMajorFlagIncludesAllPRs(t *testing.T) {
+func TestPlanCommandChangeKindAllIncludesAllPRs(t *testing.T) {
 	t.Parallel()
 
 	lister := &fakeLister{
@@ -346,7 +346,7 @@ func TestPlanCommandIncludeMajorFlagIncludesAllPRs(t *testing.T) {
 		},
 	}
 
-	stdout, err := executeTestCommand(t, lister, "plan", "-M")
+	stdout, err := executeTestCommand(t, lister, "plan", "--change-kind=all")
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
@@ -357,8 +357,8 @@ func TestPlanCommandIncludeMajorFlagIncludesAllPRs(t *testing.T) {
 	if !strings.Contains(stdout, "2. #9 [major] Bump the npm_and_yarn group with 2 updates") {
 		t.Fatalf("plan output missing included grouped major PR: %q", stdout)
 	}
-	if strings.Contains(stdout, "Excluded major updates") {
-		t.Fatalf("plan output should not render excluded section with -M: %q", stdout)
+	if strings.Contains(stdout, "Excluded by filters") {
+		t.Fatalf("plan output should not render excluded section with --change-kind=all: %q", stdout)
 	}
 }
 
@@ -385,7 +385,7 @@ func TestPlanCommandAllMajorShowsZeroPlanAndExcludedSection(t *testing.T) {
 	if !strings.Contains(stdout, "Planned order for 0 Dependabot pull request(s)") {
 		t.Fatalf("plan output missing zero-plan header: %q", stdout)
 	}
-	if !strings.Contains(stdout, "Excluded major updates (1):") {
+	if !strings.Contains(stdout, "Excluded by filters (1):") {
 		t.Fatalf("plan output missing excluded section: %q", stdout)
 	}
 	if strings.Contains(stdout, noOpenDependabotPRsMessage) {
