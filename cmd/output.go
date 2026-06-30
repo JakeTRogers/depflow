@@ -11,19 +11,20 @@ import (
 
 const (
 	noOpenDependabotPRsMessage   = "No open Dependabot pull requests found."
-	noEligiblePRsMessage         = "Nothing to do after excluding major updates."
+	noEligiblePRsMessage         = "Nothing to do after applying filters."
+	excludedPRsHeading           = "Excluded by filters"
 	rerunWithRepoFlagHint        = "rerun with --repo OWNER/REPO"
 	maxDiscoveryPullRequestLimit = 1000
 )
 
-func writeExcludedMajorUpdates(writer io.Writer, heading string, excluded []dependabot.PR) error {
+func writeExcludedPRs(writer io.Writer, heading string, excluded []dependabot.ExcludedPR) error {
 	if _, err := fmt.Fprintf(writer, "%s (%d):\n", heading, len(excluded)); err != nil {
-		return fmt.Errorf("writing excluded major updates heading: %w", err)
+		return fmt.Errorf("writing excluded PRs heading: %w", err)
 	}
 
-	for _, pr := range excluded {
-		if _, err := fmt.Fprintf(writer, "#%d %s\n", pr.Number, sanitize(pr.Title)); err != nil {
-			return fmt.Errorf("writing excluded major updates item: %w", err)
+	for _, ex := range excluded {
+		if _, err := fmt.Fprintf(writer, "#%d %s — %s\n", ex.PR.Number, sanitize(ex.PR.Title), sanitize(ex.Reason)); err != nil {
+			return fmt.Errorf("writing excluded PRs item: %w", err)
 		}
 	}
 

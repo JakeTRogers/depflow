@@ -108,28 +108,34 @@ func TestWritePlannedPRSanitizesGitHubFields(t *testing.T) {
 	}
 }
 
-func TestWriteExcludedMajorUpdatesSanitizesTitles(t *testing.T) {
+func TestWriteExcludedPRsSanitizesTitlesAndReasons(t *testing.T) {
 	t.Parallel()
 
-	excluded := []dependabot.PR{{
-		Number: 8,
-		Title:  "Bump \x1b[31mnext\x07 from 14.2.0 to 15.0.0",
+	excluded := []dependabot.ExcludedPR{{
+		PR: dependabot.PR{
+			Number: 8,
+			Title:  "Bump \x1b[31mnext\x07 from 14.2.0 to 15.0.0",
+		},
+		Reason: "change-kind \x1b[31m\"major\"\x07 not in --change-kind allow-list",
 	}}
 
 	var output bytes.Buffer
-	if err := writeExcludedMajorUpdates(&output, "Excluded major updates", excluded); err != nil {
-		t.Fatalf("writeExcludedMajorUpdates() error = %v", err)
+	if err := writeExcludedPRs(&output, "Excluded by filters", excluded); err != nil {
+		t.Fatalf("writeExcludedPRs() error = %v", err)
 	}
 
 	got := output.String()
 	if strings.ContainsAny(got, "\x00\x07\x1b\x7f") {
 		t.Fatalf("excluded output contains terminal control bytes: %q", got)
 	}
-	if !strings.Contains(got, "Excluded major updates (1):") {
+	if !strings.Contains(got, "Excluded by filters (1):") {
 		t.Fatalf("excluded output = %q, want heading", got)
 	}
 	if !strings.Contains(got, "#8 Bump [31mnext from 14.2.0 to 15.0.0") {
 		t.Fatalf("excluded output = %q, want sanitized title", got)
+	}
+	if !strings.Contains(got, `change-kind [31m"major" not in --change-kind allow-list`) {
+		t.Fatalf("excluded output = %q, want sanitized reason", got)
 	}
 }
 

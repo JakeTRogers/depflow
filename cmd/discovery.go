@@ -35,11 +35,17 @@ func discoverDependabotPRs(ctx context.Context, deps commandDeps, opts *commandO
 	sort.Slice(dependabotPRs, func(i, j int) bool {
 		return dependabotPRs[i].Number < dependabotPRs[j].Number
 	})
-	if len(dependabotPRs) > opts.limit {
-		dependabotPRs = dependabotPRs[:opts.limit]
-	}
 
 	return dependabotPRs, nil
+}
+
+// applyLimit caps prs to opts.limit. Callers apply this after classification filtering so
+// --limit bounds the eligible result set rather than the raw discovered set.
+func applyLimit(prs []dependabot.PR, opts *commandOptions) []dependabot.PR {
+	if len(prs) > opts.limit {
+		return prs[:opts.limit]
+	}
+	return prs
 }
 
 func listOpenPullRequestsForDiscovery(ctx context.Context, deps commandDeps, opts *commandOptions) ([]githubcli.PullRequest, error) {
@@ -67,6 +73,44 @@ func listOpenPullRequestsForDiscovery(ctx context.Context, deps commandDeps, opt
 		if requestLimit > maxDiscoveryPullRequestLimit {
 			requestLimit = maxDiscoveryPullRequestLimit
 		}
+	}
+}
+
+// defaultChangeKindValues mirrors the historical default of excluding major version updates
+// unless explicitly requested.
+var defaultChangeKindValues = []string{"patch", "minor", "unknown"}
+
+const changeKindAll = "all"
+
+// parseChangeKinds parses --change-kind flag values into an allow-list. The special value
+// "all" (anywhere in the list) disables change-kind filtering entirely (returns nil, nil).
+func parseChangeKinds(values []string) ([]dependabot.ChangeKind, error) {
+	kinds := make([]dependabot.ChangeKind, 0, len(values))
+	for _, value := range values {
+		if strings.EqualFold(strings.TrimSpace(value), changeKindAll) {
+			return nil, nil
+		}
+		kind, ok := dependabot.ParseChangeKind(value)
+		if !ok {
+			return nil, fmt.Errorf("invalid --change-kind value %q (want patch, minor, major, unknown, or all)", value)
+		}
+		kinds = append(kinds, kind)
+	}
+	return kinds, nil
+}
+
+func buildFilterOptions(opts *commandOptions, changeKinds []dependabot.ChangeKind, includeDrafts, applyDraftFilter bool) dependabot.FilterOptions {
+	return dependabot.FilterOptions{
+		ChangeKinds:         changeKinds,
+		Ecosystems:          opts.ecosystems,
+		ExcludeEcosystems:   opts.excludeEcosystems,
+		Dependencies:        opts.dependencies,
+		ExcludeDependencies: opts.excludeDependencies,
+		RequireLabels:       opts.requireLabels,
+		ExcludeLabels:       opts.excludeLabels,
+		SkipGrouped:         opts.skipGrouped,
+		IncludeDrafts:       includeDrafts,
+		ApplyDraftFilter:    applyDraftFilter,
 	}
 }
 

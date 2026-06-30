@@ -5,12 +5,14 @@ import (
 	"io"
 	"strings"
 
+	"github.com/JakeTRogers/depflow/internal/dependabot"
 	"github.com/JakeTRogers/depflow/internal/planner"
 	"github.com/spf13/cobra"
 )
 
 type planOptions struct {
-	includeMajor bool
+	changeKind    []string
+	includeDrafts bool
 }
 
 func newPlanCommand(deps commandDeps, opts *commandOptions) *cobra.Command {
@@ -20,12 +22,19 @@ func newPlanCommand(deps commandDeps, opts *commandOptions) *cobra.Command {
 		Use:   "plan",
 		Short: "Show the deterministic Dependabot processing order",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			changeKinds, err := parseChangeKinds(planOpts.changeKind)
+			if err != nil {
+				return err
+			}
+
 			prs, err := discoverDependabotPRs(cmd.Context(), deps, opts)
 			if err != nil {
 				return err
 			}
 
-			included, excluded := planner.PartitionMajor(prs, planOpts.includeMajor)
+			filterOpts := buildFilterOptions(opts, changeKinds, planOpts.includeDrafts, true)
+			included, excluded := dependabot.Filter(prs, filterOpts)
+			included = applyLimit(included, opts)
 			plan := planner.Build(included)
 			if len(plan.Items) == 0 && len(excluded) == 0 {
 				if _, err := fmt.Fprintln(cmd.OutOrStdout(), noOpenDependabotPRsMessage); err != nil {
@@ -55,7 +64,7 @@ func newPlanCommand(deps commandDeps, opts *commandOptions) *cobra.Command {
 						return fmt.Errorf("writing plan separator: %w", err)
 					}
 				}
-				if err := writeExcludedMajorUpdates(cmd.OutOrStdout(), "Excluded major updates", excluded); err != nil {
+				if err := writeExcludedPRs(cmd.OutOrStdout(), excludedPRsHeading, excluded); err != nil {
 					return err
 				}
 			}
@@ -64,7 +73,8 @@ func newPlanCommand(deps commandDeps, opts *commandOptions) *cobra.Command {
 		},
 	}
 
-	cmd.Flags().BoolVarP(&planOpts.includeMajor, "include-major", "M", false, "include major version updates in planning")
+	cmd.Flags().StringSliceVar(&planOpts.changeKind, "change-kind", defaultChangeKindValues, "include only these change kinds: patch, minor, major, unknown, or all")
+	cmd.Flags().BoolVar(&planOpts.includeDrafts, "include-drafts", false, "include draft Dependabot PRs in planning")
 
 	return cmd
 }

@@ -43,25 +43,6 @@ type Plan struct {
 	Items []PlannedPR
 }
 
-// PartitionMajor splits PRs into included and excluded slices based on major-version handling.
-func PartitionMajor(prs []dependabot.PR, includeMajor bool) (included, excluded []dependabot.PR) {
-	if includeMajor {
-		return append([]dependabot.PR(nil), prs...), nil
-	}
-
-	included = make([]dependabot.PR, 0, len(prs))
-	excluded = make([]dependabot.PR, 0)
-	for _, pr := range prs {
-		if pr.Classification.HasMajorVersionBump() {
-			excluded = append(excluded, pr)
-			continue
-		}
-		included = append(included, pr)
-	}
-
-	return included, excluded
-}
-
 // Build returns the deterministic milestone-1 processing order.
 func Build(prs []dependabot.PR) Plan {
 	items := make([]PlannedPR, 0, len(prs))
