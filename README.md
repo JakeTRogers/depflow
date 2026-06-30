@@ -45,6 +45,8 @@ If the process receives `SIGINT` or `SIGTERM`, depflow cancels the active execut
 - `--check-timeout` — maximum wait for CI checks per PR (default: 30m, must be greater than `--poll-interval`)
 - `--post-merge-delay` — delay before checking post-merge CI (default: 10s)
 - `--post-merge-timeout` — maximum wait for post-merge CI (default: 30m, must be greater than `--poll-interval`)
+- `--show-checks` — show per-check pass/pending/fail detail on the progress line while waiting for CI, post-merge CI, and branch updates
+- `--show-timing` — show elapsed wait time on the progress line and per-PR duration in the execution summary
 
 All execute duration flags must be greater than zero. `--poll-interval` must be at least 5 seconds. `--check-timeout` and `--post-merge-timeout` must be greater than `--poll-interval`.
 
@@ -64,7 +66,7 @@ depflow 0.1.0 (linux/amd64)
 
 ## Output Conventions
 
-- GitHub-derived strings printed by `scan`, `plan`, execute dry-run output, execution summaries, and top-level error output are sanitized to strip terminal control bytes before being written to the terminal.
+- GitHub-derived strings printed by `scan`, `plan`, execute dry-run output, execution summaries, the live progress line (including `--show-checks` check and workflow run names), and top-level error output are sanitized to strip terminal control bytes before being written to the terminal.
 - `scan`, `plan`, and `execute` print `No open Dependabot pull requests found.` when no Dependabot PRs are discovered.
 - With default major filtering enabled, `plan` lists excluded major PRs separately and `execute` prints `Nothing to do after excluding major updates.` when no eligible PRs remain.
 - When repository inference fails and `--repo` was omitted, depflow includes a rerun hint using `--repo OWNER/REPO`.
@@ -94,6 +96,7 @@ depflow --repo owner/repo execute --dry-run
 depflow --repo owner/repo execute --dry-run -M
 depflow -v --repo owner/repo execute
 depflow -vv --repo owner/repo execute --poll-interval 15s --check-timeout 10m
+depflow --repo owner/repo execute --show-checks --show-timing
 depflow version
 ```
 
@@ -120,6 +123,7 @@ depflow completion fish | source
 - `internal/executor/` — Sequential PR processing loop with Operator interface (dependency injection), approval before merge, and polling helpers for CI checks, branch updates, and post-merge CI
 - `internal/githubcli/` — Thin `gh` CLI wrapper: list PRs, view PR details, approve, merge, comment, compare branches, list workflow runs
 - `internal/progress/` — mpb-based live progress tracker with verbosity-controlled slog logger
+- `internal/terminal/` — Strips terminal control bytes from untrusted GitHub-sourced strings before they reach the terminal
 - `main.go` — Entry point
 
 ## Development

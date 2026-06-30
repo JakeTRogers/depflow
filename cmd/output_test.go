@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/JakeTRogers/depflow/internal/dependabot"
 	"github.com/JakeTRogers/depflow/internal/executor"
@@ -158,7 +159,7 @@ func TestPrintDryRunAndResultSanitizeTitlesAndErrors(t *testing.T) {
 	}}}
 
 	var resultOutput bytes.Buffer
-	if err := printResult(&resultOutput, result); err != nil {
+	if err := printResult(&resultOutput, result, false); err != nil {
 		t.Fatalf("printResult() error = %v", err)
 	}
 
@@ -171,6 +172,32 @@ func TestPrintDryRunAndResultSanitizeTitlesAndErrors(t *testing.T) {
 	}
 	if !strings.Contains(got, "merge failed at https://example.test/pr/5]8;;evil") {
 		t.Fatalf("result output = %q, want sanitized error", got)
+	}
+}
+
+func TestPrintResultShowTimingIncludesDuration(t *testing.T) {
+	t.Parallel()
+
+	result := &executor.Result{Processed: []executor.PRResult{{
+		Item:     planner.PlannedPR{PR: dependabot.PR{Number: 9, Title: "Bump foo"}},
+		Status:   "merged",
+		Duration: 90 * time.Second,
+	}}}
+
+	var withTiming bytes.Buffer
+	if err := printResult(&withTiming, result, true); err != nil {
+		t.Fatalf("printResult() error = %v", err)
+	}
+	if !strings.Contains(withTiming.String(), "(1m30s)") {
+		t.Fatalf("result output = %q, want duration", withTiming.String())
+	}
+
+	var withoutTiming bytes.Buffer
+	if err := printResult(&withoutTiming, result, false); err != nil {
+		t.Fatalf("printResult() error = %v", err)
+	}
+	if strings.Contains(withoutTiming.String(), "1m30s") {
+		t.Fatalf("result output = %q, want no duration when --show-timing is unset", withoutTiming.String())
 	}
 }
 

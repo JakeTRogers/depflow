@@ -778,6 +778,18 @@ func TestRunProgressUpdates(t *testing.T) {
 	if !foundMerged {
 		t.Errorf("expected 'Merged PR #20' status, got: %v", spy.statuses)
 	}
+
+	// Verify that the last PR explicitly reports skipping the post-merge CI wait
+	foundSkipMessage := false
+	for _, s := range spy.statuses {
+		if strings.Contains(s, "PR #20") && strings.Contains(s, "skipping post-merge CI wait") {
+			foundSkipMessage = true
+			break
+		}
+	}
+	if !foundSkipMessage {
+		t.Errorf("expected a status noting post-merge CI wait was skipped for the last PR, got: %v", spy.statuses)
+	}
 }
 
 func TestRunPostMergeFailureMarksMergedPRFailed(t *testing.T) {
@@ -830,5 +842,62 @@ func TestRunPostMergeFailureMarksMergedPRFailed(t *testing.T) {
 	}
 	if len(op.mergeCalls) != 1 || op.mergeCalls[0] != 1 {
 		t.Fatalf("merge calls: got %v, want [1]", op.mergeCalls)
+	}
+}
+
+func TestRunRecordedDurationIncludesPostMergeWait(t *testing.T) {
+	t.Parallel()
+
+	plan := newTestPlan(
+		dependabot.PR{Number: 1, Title: "bump foo", BaseRef: "main"},
+		dependabot.PR{Number: 2, Title: "bump bar", BaseRef: "main"},
+	)
+
+	op := &fakeOperator{
+		viewResults: map[int][]githubcli.PRDetail{
+			1: {
+				{Number: 1, State: "OPEN", Mergeable: "MERGEABLE", HeadRefName: "feature-1", BaseRefName: "main",
+					StatusCheckRollup: []githubcli.StatusCheck{{Name: "ci", Conclusion: "success"}}},
+				{Number: 1, State: "OPEN", StatusCheckRollup: []githubcli.StatusCheck{{Name: "ci", Conclusion: "success"}}},
+				{Number: 1, State: "OPEN", Mergeable: "MERGEABLE", HeadRefName: "feature-1", BaseRefName: "main"},
+				{Number: 1, State: "MERGED", BaseRefName: "main", MergeCommit: githubcli.MergeCommit{OID: "merge-sha-1"}},
+			},
+			2: {
+				{Number: 2, State: "MERGED", BaseRefName: "main"},
+			},
+		},
+		compareResults: []githubcli.BranchComparison{
+			{BehindBy: 0},
+			{BehindBy: 0},
+		},
+		// Two pending polls before completion force real wall-clock waiting inside
+		// waitForPostMergeCI, proving the recorded duration is not captured at merge time.
+		runResults: map[string][][]githubcli.WorkflowRun{
+			"main": {
+				{{Name: "CI", Status: "in_progress", HeadSHA: "merge-sha-1"}},
+				{{Name: "CI", Status: "in_progress", HeadSHA: "merge-sha-1"}},
+				{{Name: "CI", Status: "completed", Conclusion: "success", HeadSHA: "merge-sha-1"}},
+			},
+		},
+		mergeErrors:   map[int]error{},
+		commentErrors: map[int]error{},
+		viewErrors:    map[int]error{},
+	}
+
+	cfg := testConfig()
+	cfg.PollInterval = 20 * time.Millisecond
+
+	result, err := Run(context.Background(), op, plan, "owner/repo", cfg, testLogger(), nopProgress{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result.Processed) != 2 {
+		t.Fatalf("processed count: got %d, want 2", len(result.Processed))
+	}
+
+	// The post-merge wait for PR #1 took at least two poll intervals; the recorded
+	// duration must reflect that wait, not just the time up to the merge call.
+	if want := cfg.PollInterval * 2; result.Processed[0].Duration < want {
+		t.Fatalf("PR #1 duration = %s, want at least %s (post-merge wait should be included)", result.Processed[0].Duration, want)
 	}
 }

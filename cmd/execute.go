@@ -22,6 +22,8 @@ type executeOptions struct {
 	checkTimeout     time.Duration
 	postMergeDelay   time.Duration
 	postMergeTimeout time.Duration
+	showChecks       bool
+	showTiming       bool
 }
 
 const minPollInterval = 5 * time.Second
@@ -87,6 +89,8 @@ func newExecuteCommand(deps commandDeps, opts *commandOptions) *cobra.Command {
 				CheckTimeout:     execOpts.checkTimeout,
 				PostMergeDelay:   execOpts.postMergeDelay,
 				PostMergeTimeout: execOpts.postMergeTimeout,
+				ShowChecks:       execOpts.showChecks,
+				ShowTiming:       execOpts.showTiming,
 			}
 
 			repo, err := resolveExecuteRepo(cmd.Context(), deps, opts.repo)
@@ -101,7 +105,7 @@ func newExecuteCommand(deps commandDeps, opts *commandOptions) *cobra.Command {
 			result, err := executor.Run(cmd.Context(), deps.operator, plan, repo, cfg, log, ui)
 
 			ui.Stop()
-			if printErr := printResult(cmd.OutOrStdout(), result); printErr != nil {
+			if printErr := printResult(cmd.OutOrStdout(), result, execOpts.showTiming); printErr != nil {
 				if err != nil {
 					return errors.Join(err, printErr)
 				}
@@ -118,6 +122,8 @@ func newExecuteCommand(deps commandDeps, opts *commandOptions) *cobra.Command {
 	cmd.Flags().DurationVar(&execOpts.checkTimeout, "check-timeout", 30*time.Minute, "maximum wait for CI checks per PR")
 	cmd.Flags().DurationVar(&execOpts.postMergeDelay, "post-merge-delay", 10*time.Second, "delay before checking post-merge CI")
 	cmd.Flags().DurationVar(&execOpts.postMergeTimeout, "post-merge-timeout", 30*time.Minute, "maximum wait for post-merge CI")
+	cmd.Flags().BoolVar(&execOpts.showChecks, "show-checks", false, "show per-check pass/pending/fail detail while waiting")
+	cmd.Flags().BoolVar(&execOpts.showTiming, "show-timing", false, "show elapsed wait time and per-PR duration")
 
 	return cmd
 }
@@ -189,7 +195,7 @@ func printDryRun(w io.Writer, plan planner.Plan) error {
 	return nil
 }
 
-func printResult(w io.Writer, result *executor.Result) error {
+func printResult(w io.Writer, result *executor.Result, showTiming bool) error {
 	if result == nil {
 		return nil
 	}
@@ -207,6 +213,9 @@ func printResult(w io.Writer, result *executor.Result) error {
 	for _, pr := range result.Processed {
 		status := string(pr.Status)
 		line := fmt.Sprintf("#%d %s — %s", pr.Item.PR.Number, sanitize(pr.Item.PR.Title), status)
+		if showTiming {
+			line += fmt.Sprintf(" (%s)", pr.Duration.Round(time.Second))
+		}
 		if pr.Error != nil {
 			line += fmt.Sprintf(" (%s)", sanitizeError(pr.Error))
 		}
