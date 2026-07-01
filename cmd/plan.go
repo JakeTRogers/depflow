@@ -90,7 +90,7 @@ func writePlannedPR(writer io.Writer, index int, item planner.PlannedPR) error {
 	fmt.Fprintf(&builder, "%d. #%d [%s] %s\n", index, item.PR.Number, item.Bucket, title)
 	fmt.Fprintf(&builder, "   signals: ecosystem=%s change=%s grouped=%s dev-tooling=%s infra-sensitive=%s\n",
 		displayOrUnknown(classification.Ecosystem),
-		classification.ChangeKind,
+		classification.EffectiveChangeKind(),
 		yesNo(classification.Grouped),
 		yesNo(classification.DeveloperTooling),
 		yesNo(classification.InfrastructureSensitive))

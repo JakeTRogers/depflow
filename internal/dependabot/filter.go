@@ -46,10 +46,7 @@ func exclusionReason(pr PR, opts FilterOptions) (string, bool) {
 	}
 
 	if len(opts.ChangeKinds) > 0 {
-		kind := pr.Classification.ChangeKind
-		if pr.Classification.HasMajorVersionBump() {
-			kind = ChangeMajor
-		}
+		kind := pr.Classification.EffectiveChangeKind()
 		if !containsChangeKind(opts.ChangeKinds, kind) {
 			return fmt.Sprintf("change-kind %q not in --change-kind allow-list", kind), true
 		}

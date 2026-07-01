@@ -130,6 +130,17 @@ func (c Classification) HasMajorVersionBump() bool {
 	return c.ChangeKind == ChangeMajor || c.ContainsMajorUpdate
 }
 
+// EffectiveChangeKind returns the change kind used for filtering, bucketing, and display.
+// Grouped PRs whose body contains a major version bump report as ChangeMajor even when the
+// PR's own title has no parseable "from X to Y" version range (ChangeKind would otherwise be
+// ChangeUnknown).
+func (c Classification) EffectiveChangeKind() ChangeKind {
+	if c.HasMajorVersionBump() {
+		return ChangeMajor
+	}
+	return c.ChangeKind
+}
+
 // ParseChangeKind parses a case-insensitive --change-kind flag value into a ChangeKind.
 func ParseChangeKind(value string) (ChangeKind, bool) {
 	switch strings.ToLower(strings.TrimSpace(value)) {
