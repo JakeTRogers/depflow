@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/JakeTRogers/depflow/internal/dependabot"
 	"github.com/JakeTRogers/depflow/internal/executor"
@@ -107,28 +108,34 @@ func TestWritePlannedPRSanitizesGitHubFields(t *testing.T) {
 	}
 }
 
-func TestWriteExcludedMajorUpdatesSanitizesTitles(t *testing.T) {
+func TestWriteExcludedPRsSanitizesTitlesAndReasons(t *testing.T) {
 	t.Parallel()
 
-	excluded := []dependabot.PR{{
-		Number: 8,
-		Title:  "Bump \x1b[31mnext\x07 from 14.2.0 to 15.0.0",
+	excluded := []dependabot.ExcludedPR{{
+		PR: dependabot.PR{
+			Number: 8,
+			Title:  "Bump \x1b[31mnext\x07 from 14.2.0 to 15.0.0",
+		},
+		Reason: "change-kind \x1b[31m\"major\"\x07 not in --change-kind allow-list",
 	}}
 
 	var output bytes.Buffer
-	if err := writeExcludedMajorUpdates(&output, "Excluded major updates", excluded); err != nil {
-		t.Fatalf("writeExcludedMajorUpdates() error = %v", err)
+	if err := writeExcludedPRs(&output, "Excluded by filters", excluded); err != nil {
+		t.Fatalf("writeExcludedPRs() error = %v", err)
 	}
 
 	got := output.String()
 	if strings.ContainsAny(got, "\x00\x07\x1b\x7f") {
 		t.Fatalf("excluded output contains terminal control bytes: %q", got)
 	}
-	if !strings.Contains(got, "Excluded major updates (1):") {
+	if !strings.Contains(got, "Excluded by filters (1):") {
 		t.Fatalf("excluded output = %q, want heading", got)
 	}
 	if !strings.Contains(got, "#8 Bump [31mnext from 14.2.0 to 15.0.0") {
 		t.Fatalf("excluded output = %q, want sanitized title", got)
+	}
+	if !strings.Contains(got, `change-kind [31m"major" not in --change-kind allow-list`) {
+		t.Fatalf("excluded output = %q, want sanitized reason", got)
 	}
 }
 
@@ -158,7 +165,7 @@ func TestPrintDryRunAndResultSanitizeTitlesAndErrors(t *testing.T) {
 	}}}
 
 	var resultOutput bytes.Buffer
-	if err := printResult(&resultOutput, result); err != nil {
+	if err := printResult(&resultOutput, result, false); err != nil {
 		t.Fatalf("printResult() error = %v", err)
 	}
 
@@ -171,6 +178,32 @@ func TestPrintDryRunAndResultSanitizeTitlesAndErrors(t *testing.T) {
 	}
 	if !strings.Contains(got, "merge failed at https://example.test/pr/5]8;;evil") {
 		t.Fatalf("result output = %q, want sanitized error", got)
+	}
+}
+
+func TestPrintResultShowTimingIncludesDuration(t *testing.T) {
+	t.Parallel()
+
+	result := &executor.Result{Processed: []executor.PRResult{{
+		Item:     planner.PlannedPR{PR: dependabot.PR{Number: 9, Title: "Bump foo"}},
+		Status:   "merged",
+		Duration: 90 * time.Second,
+	}}}
+
+	var withTiming bytes.Buffer
+	if err := printResult(&withTiming, result, true); err != nil {
+		t.Fatalf("printResult() error = %v", err)
+	}
+	if !strings.Contains(withTiming.String(), "(1m30s)") {
+		t.Fatalf("result output = %q, want duration", withTiming.String())
+	}
+
+	var withoutTiming bytes.Buffer
+	if err := printResult(&withoutTiming, result, false); err != nil {
+		t.Fatalf("printResult() error = %v", err)
+	}
+	if strings.Contains(withoutTiming.String(), "1m30s") {
+		t.Fatalf("result output = %q, want no duration when --show-timing is unset", withoutTiming.String())
 	}
 }
 

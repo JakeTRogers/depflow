@@ -297,7 +297,7 @@ func TestExecuteCommandDryRunPrintsPlanWithoutResolvingRepoOrExecuting(t *testin
 	if !strings.Contains(stdout.String(), "1. #42 [patch] Bump lodash from 4.17.20 to 4.17.21") {
 		t.Fatalf("stdout = %q, want planned PR entry", stdout.String())
 	}
-	if strings.Contains(stdout.String(), "Excluding major updates") {
+	if strings.Contains(stdout.String(), "Excluded by filters") {
 		t.Fatalf("stdout = %q, should not render exclusion notice when no major PRs exist", stdout.String())
 	}
 	if resolver.calls != 0 {
@@ -417,7 +417,7 @@ func TestExecuteCommandExcludesMajorUpdatesByDefault(t *testing.T) {
 		t.Fatalf("Execute() error = %v", err)
 	}
 
-	if !strings.Contains(stdout.String(), "Excluding major updates (1):") {
+	if !strings.Contains(stdout.String(), "Excluded by filters (1):") {
 		t.Fatalf("stdout = %q, want exclusion notice", stdout.String())
 	}
 	if !strings.Contains(stdout.String(), "#2 Bump github.com/pkg/errors from 0.9.1 to 1.0.0") {
@@ -459,7 +459,7 @@ func TestExecuteCommandAllMajorIsNoOp(t *testing.T) {
 		t.Fatalf("Execute() error = %v", err)
 	}
 
-	if !strings.Contains(stdout.String(), "Excluding major updates (1):") {
+	if !strings.Contains(stdout.String(), "Excluded by filters (1):") {
 		t.Fatalf("stdout = %q, want exclusion notice", stdout.String())
 	}
 	if !strings.Contains(stdout.String(), noEligiblePRsMessage) {
@@ -504,7 +504,7 @@ func TestExecuteCommandDryRunWithExclusions(t *testing.T) {
 		t.Fatalf("Execute() error = %v", err)
 	}
 
-	if !strings.Contains(stdout, "Excluding major updates (1):") {
+	if !strings.Contains(stdout, "Excluded by filters (1):") {
 		t.Fatalf("stdout = %q, want exclusion notice", stdout)
 	}
 	if !strings.Contains(stdout, "Dry run: 1 PR(s) would be processed in this order:") {
@@ -515,7 +515,7 @@ func TestExecuteCommandDryRunWithExclusions(t *testing.T) {
 	}
 }
 
-func TestExecuteCommandIncludeMajorFlagIncludesAllPRs(t *testing.T) {
+func TestExecuteCommandChangeKindAllIncludesAllPRs(t *testing.T) {
 	t.Parallel()
 
 	lister := &fakeLister{
@@ -541,13 +541,13 @@ func TestExecuteCommandIncludeMajorFlagIncludesAllPRs(t *testing.T) {
 		},
 	}
 
-	stdout, err := executeTestCommand(t, lister, "execute", "--dry-run", "-M")
+	stdout, err := executeTestCommand(t, lister, "execute", "--dry-run", "--change-kind=all")
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
 
-	if strings.Contains(stdout, "Excluding major updates") {
-		t.Fatalf("stdout = %q, should not exclude majors with -M", stdout)
+	if strings.Contains(stdout, "Excluded by filters") {
+		t.Fatalf("stdout = %q, should not exclude majors with --change-kind=all", stdout)
 	}
 	if !strings.Contains(stdout, "Dry run: 2 PR(s) would be processed in this order:") {
 		t.Fatalf("stdout = %q, want full dry-run header", stdout)

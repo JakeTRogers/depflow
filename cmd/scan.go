@@ -19,6 +19,10 @@ func newScanCommand(deps commandDeps, opts *commandOptions) *cobra.Command {
 				return err
 			}
 
+			filterOpts := buildFilterOptions(opts, nil, true, false)
+			prs, _ = dependabot.Filter(prs, filterOpts)
+			prs = applyLimit(prs, opts)
+
 			if len(prs) == 0 {
 				if _, err := fmt.Fprintln(cmd.OutOrStdout(), noOpenDependabotPRsMessage); err != nil {
 					return fmt.Errorf("writing scan output: %w", err)
@@ -65,7 +69,7 @@ func writeScannedPR(writer io.Writer, pr dependabot.PR) error {
 	}
 	fmt.Fprintf(&builder, "  classification: ecosystem=%s change=%s grouped=%s dev-tooling=%s infra-sensitive=%s\n",
 		displayOrUnknown(classification.Ecosystem),
-		classification.ChangeKind,
+		classification.EffectiveChangeKind(),
 		yesNo(classification.Grouped),
 		yesNo(classification.DeveloperTooling),
 		yesNo(classification.InfrastructureSensitive))

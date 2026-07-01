@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/JakeTRogers/depflow/internal/dependabot"
 	"github.com/JakeTRogers/depflow/internal/executor"
 	"github.com/JakeTRogers/depflow/internal/planner"
 	"github.com/JakeTRogers/depflow/internal/progress"
@@ -16,12 +17,15 @@ import (
 
 type executeOptions struct {
 	dryRun           bool
-	includeMajor     bool
+	changeKind       []string
+	includeDrafts    bool
 	admin            bool
 	pollInterval     time.Duration
 	checkTimeout     time.Duration
 	postMergeDelay   time.Duration
 	postMergeTimeout time.Duration
+	showChecks       bool
+	showTiming       bool
 }
 
 const minPollInterval = 5 * time.Second
@@ -37,14 +41,21 @@ func newExecuteCommand(deps commandDeps, opts *commandOptions) *cobra.Command {
 				return err
 			}
 
+			changeKinds, err := parseChangeKinds(execOpts.changeKind)
+			if err != nil {
+				return err
+			}
+
 			prs, err := discoverDependabotPRs(cmd.Context(), deps, opts)
 			if err != nil {
 				return err
 			}
 
-			included, excluded := planner.PartitionMajor(prs, execOpts.includeMajor)
+			filterOpts := buildFilterOptions(opts, changeKinds, execOpts.includeDrafts, true)
+			included, excluded := dependabot.Filter(prs, filterOpts)
+			included = applyLimit(included, opts)
 			if len(excluded) > 0 {
-				if err := writeExcludedMajorUpdates(cmd.OutOrStdout(), "Excluding major updates", excluded); err != nil {
+				if err := writeExcludedPRs(cmd.OutOrStdout(), excludedPRsHeading, excluded); err != nil {
 					return err
 				}
 			}
@@ -87,6 +98,8 @@ func newExecuteCommand(deps commandDeps, opts *commandOptions) *cobra.Command {
 				CheckTimeout:     execOpts.checkTimeout,
 				PostMergeDelay:   execOpts.postMergeDelay,
 				PostMergeTimeout: execOpts.postMergeTimeout,
+				ShowChecks:       execOpts.showChecks,
+				ShowTiming:       execOpts.showTiming,
 			}
 
 			repo, err := resolveExecuteRepo(cmd.Context(), deps, opts.repo)
@@ -101,7 +114,7 @@ func newExecuteCommand(deps commandDeps, opts *commandOptions) *cobra.Command {
 			result, err := executor.Run(cmd.Context(), deps.operator, plan, repo, cfg, log, ui)
 
 			ui.Stop()
-			if printErr := printResult(cmd.OutOrStdout(), result); printErr != nil {
+			if printErr := printResult(cmd.OutOrStdout(), result, execOpts.showTiming); printErr != nil {
 				if err != nil {
 					return errors.Join(err, printErr)
 				}
@@ -112,12 +125,15 @@ func newExecuteCommand(deps commandDeps, opts *commandOptions) *cobra.Command {
 	}
 
 	cmd.Flags().BoolVar(&execOpts.dryRun, "dry-run", false, "show planned order without executing")
-	cmd.Flags().BoolVarP(&execOpts.includeMajor, "include-major", "M", false, "include major version updates in execution")
+	cmd.Flags().StringSliceVar(&execOpts.changeKind, "change-kind", defaultChangeKindValues, "include only these change kinds: patch, minor, major, unknown, or all")
+	cmd.Flags().BoolVar(&execOpts.includeDrafts, "include-drafts", false, "include draft Dependabot PRs in execution")
 	cmd.Flags().BoolVar(&execOpts.admin, "admin", false, "bypass branch protection rules using GitHub admin privileges")
 	cmd.Flags().DurationVar(&execOpts.pollInterval, "poll-interval", 30*time.Second, "CI status polling interval")
 	cmd.Flags().DurationVar(&execOpts.checkTimeout, "check-timeout", 30*time.Minute, "maximum wait for CI checks per PR")
 	cmd.Flags().DurationVar(&execOpts.postMergeDelay, "post-merge-delay", 10*time.Second, "delay before checking post-merge CI")
 	cmd.Flags().DurationVar(&execOpts.postMergeTimeout, "post-merge-timeout", 30*time.Minute, "maximum wait for post-merge CI")
+	cmd.Flags().BoolVar(&execOpts.showChecks, "show-checks", false, "show per-check pass/pending/fail detail while waiting")
+	cmd.Flags().BoolVar(&execOpts.showTiming, "show-timing", false, "show elapsed wait time and per-PR duration")
 
 	return cmd
 }
@@ -189,7 +205,7 @@ func printDryRun(w io.Writer, plan planner.Plan) error {
 	return nil
 }
 
-func printResult(w io.Writer, result *executor.Result) error {
+func printResult(w io.Writer, result *executor.Result, showTiming bool) error {
 	if result == nil {
 		return nil
 	}
@@ -207,6 +223,9 @@ func printResult(w io.Writer, result *executor.Result) error {
 	for _, pr := range result.Processed {
 		status := string(pr.Status)
 		line := fmt.Sprintf("#%d %s — %s", pr.Item.PR.Number, sanitize(pr.Item.PR.Title), status)
+		if showTiming {
+			line += fmt.Sprintf(" (%s)", pr.Duration.Round(time.Second))
+		}
 		if pr.Error != nil {
 			line += fmt.Sprintf(" (%s)", sanitizeError(pr.Error))
 		}

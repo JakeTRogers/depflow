@@ -227,7 +227,7 @@ func TestPlanCommandOrdersPRs(t *testing.T) {
 	if !strings.Contains(stdout, "reason: grouped update sorts after simple low-risk updates") {
 		t.Fatalf("plan output missing grouped rationale: %q", stdout)
 	}
-	if strings.Contains(stdout, "Excluded major updates") {
+	if strings.Contains(stdout, "Excluded by filters") {
 		t.Fatalf("plan output should not render excluded section when no major PRs exist: %q", stdout)
 	}
 	if !strings.Contains(stdout, "signals: ecosystem=npm-and-yarn change=unknown grouped=yes dev-tooling=no infra-sensitive=no") {
@@ -265,7 +265,7 @@ func TestPlanCommandGroupedSummaryWithoutParseableVersionsRemainsIncluded(t *tes
 	if !strings.Contains(stdout, "1. #13 [grouped] Bump the npm_and_yarn group with 2 updates") {
 		t.Fatalf("plan output missing included grouped summary PR: %q", stdout)
 	}
-	if strings.Contains(stdout, "Excluded major updates") {
+	if strings.Contains(stdout, "Excluded by filters") {
 		t.Fatalf("plan output should not exclude grouped summaries without parseable versions: %q", stdout)
 	}
 	if strings.Contains(stdout, noOpenDependabotPRsMessage) {
@@ -311,7 +311,7 @@ func TestPlanCommandExcludesMajorUpdatesByDefault(t *testing.T) {
 	if !strings.Contains(stdout, "1. #1 [ci] Bump actions/cache from 4.2.0 to 4.2.1") {
 		t.Fatalf("plan output missing included PR: %q", stdout)
 	}
-	if !strings.Contains(stdout, "Excluded major updates (1):") {
+	if !strings.Contains(stdout, "Excluded by filters (1):") {
 		t.Fatalf("plan output missing excluded section: %q", stdout)
 	}
 	if !strings.Contains(stdout, "#9 Bump the npm_and_yarn group with 2 updates") {
@@ -319,7 +319,7 @@ func TestPlanCommandExcludesMajorUpdatesByDefault(t *testing.T) {
 	}
 }
 
-func TestPlanCommandIncludeMajorFlagIncludesAllPRs(t *testing.T) {
+func TestPlanCommandChangeKindAllIncludesAllPRs(t *testing.T) {
 	t.Parallel()
 
 	lister := &fakeLister{
@@ -346,7 +346,7 @@ func TestPlanCommandIncludeMajorFlagIncludesAllPRs(t *testing.T) {
 		},
 	}
 
-	stdout, err := executeTestCommand(t, lister, "plan", "-M")
+	stdout, err := executeTestCommand(t, lister, "plan", "--change-kind=all")
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
@@ -357,8 +357,11 @@ func TestPlanCommandIncludeMajorFlagIncludesAllPRs(t *testing.T) {
 	if !strings.Contains(stdout, "2. #9 [major] Bump the npm_and_yarn group with 2 updates") {
 		t.Fatalf("plan output missing included grouped major PR: %q", stdout)
 	}
-	if strings.Contains(stdout, "Excluded major updates") {
-		t.Fatalf("plan output should not render excluded section with -M: %q", stdout)
+	if !strings.Contains(stdout, "signals: ecosystem=npm-and-yarn change=major grouped=yes dev-tooling=no infra-sensitive=no") {
+		t.Fatalf("plan output should report change=major for a grouped PR with a major bump in its body, consistent with the [major] bucket it lands in: %q", stdout)
+	}
+	if strings.Contains(stdout, "Excluded by filters") {
+		t.Fatalf("plan output should not render excluded section with --change-kind=all: %q", stdout)
 	}
 }
 
@@ -385,7 +388,7 @@ func TestPlanCommandAllMajorShowsZeroPlanAndExcludedSection(t *testing.T) {
 	if !strings.Contains(stdout, "Planned order for 0 Dependabot pull request(s)") {
 		t.Fatalf("plan output missing zero-plan header: %q", stdout)
 	}
-	if !strings.Contains(stdout, "Excluded major updates (1):") {
+	if !strings.Contains(stdout, "Excluded by filters (1):") {
 		t.Fatalf("plan output missing excluded section: %q", stdout)
 	}
 	if strings.Contains(stdout, noOpenDependabotPRsMessage) {
@@ -423,6 +426,37 @@ func TestScanCommandShowsGroupedDependencySummary(t *testing.T) {
 	}
 	if strings.Contains(stdout, "dependency: packages-a599cde353") {
 		t.Fatalf("scan output should not fall back to opaque grouped branch slug: %q", stdout)
+	}
+}
+
+func TestScanCommandShowsMajorForGroupedBodyMajorBump(t *testing.T) {
+	t.Parallel()
+
+	lister := &fakeLister{
+		pullRequests: []githubcli.PullRequest{
+			{
+				Number:      9,
+				Title:       "Bump the npm_and_yarn group with 2 updates",
+				Body:        "Updates `next` from 14.2.0 to 15.0.0\nUpdates `react` from 18.3.0 to 18.3.1",
+				URL:         "https://example.test/pr/9",
+				Author:      githubcli.PullRequestAuthor{Login: "dependabot[bot]"},
+				Labels:      []githubcli.PullRequestLabel{{Name: "dependencies"}},
+				HeadRefName: "dependabot/npm_and_yarn/group-frontend-deps",
+				BaseRefName: "main",
+			},
+		},
+	}
+
+	stdout, err := executeTestCommand(t, lister, "scan")
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	// This PR's title has no parseable "from X to Y" range (ChangeKind would otherwise report
+	// "unknown"), but its body contains a major version bump. scan must report change=major here
+	// since that's the same signal plan/execute use to bucket and exclude it as major by default.
+	if !strings.Contains(stdout, "classification: ecosystem=npm-and-yarn change=major grouped=yes dev-tooling=no infra-sensitive=no") {
+		t.Fatalf("scan output should report change=major for a grouped PR with a major bump in its body: %q", stdout)
 	}
 }
 

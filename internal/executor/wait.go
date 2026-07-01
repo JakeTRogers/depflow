@@ -6,6 +6,9 @@ import (
 	"log/slog"
 	"strings"
 	"time"
+
+	"github.com/JakeTRogers/depflow/internal/githubcli"
+	"github.com/JakeTRogers/depflow/internal/terminal"
 )
 
 type checkFailure struct {
@@ -41,10 +44,56 @@ func resetTimer(timer *time.Timer, delay time.Duration) {
 	timer.Reset(delay)
 }
 
+// waitStatus builds a progress status line, optionally appending elapsed time and a detail suffix.
+func waitStatus(base string, cfg Config, start time.Time, detail string) string {
+	status := base
+	if cfg.ShowTiming {
+		status = fmt.Sprintf("%s [%s elapsed]", status, time.Since(start).Round(time.Second))
+	}
+	if cfg.ShowChecks && detail != "" {
+		status = fmt.Sprintf("%s — %s", status, detail)
+	}
+	return status
+}
+
+// summarizeChecks renders a compact pending/failed breakdown of a PR's status checks.
+func summarizeChecks(checks []githubcli.StatusCheck) string {
+	var pending, failed []string
+	passed := 0
+	for _, c := range checks {
+		name := c.Name
+		if name == "" {
+			name = c.Context
+		}
+		name = terminal.Sanitize(name)
+		conclusion := strings.ToLower(c.Conclusion)
+		state := strings.ToLower(c.State)
+
+		switch {
+		case isTerminalFailureConclusion(conclusion) || state == "failure" || state == "error":
+			failed = append(failed, name)
+		case conclusion == "success" || conclusion == "neutral" || conclusion == "skipped" || state == "success":
+			passed++
+		default:
+			pending = append(pending, name)
+		}
+	}
+
+	summary := fmt.Sprintf("%d/%d checks complete", passed+len(failed), len(checks))
+	if len(pending) > 0 {
+		summary += fmt.Sprintf(", pending: %s", strings.Join(pending, ", "))
+	}
+	if len(failed) > 0 {
+		summary += fmt.Sprintf(", failed: %s", strings.Join(failed, ", "))
+	}
+	return summary
+}
+
 // waitForChecks polls ViewPullRequest until all status checks pass, a non-admin failure is observed,
 // admin-mode checks settle with failures, or the wait times out.
 func waitForChecks(ctx context.Context, op Operator, repo string, number int, cfg Config, log *slog.Logger, progress Progress) (checkResult, error) {
-	progress.SetStatus(fmt.Sprintf("Waiting for CI on PR #%d", number))
+	start := time.Now()
+	progress.SetStatus(waitStatus(fmt.Sprintf("Waiting for CI on PR #%d", number), cfg, start, ""))
 
 	parentCtx := ctx
 	ctx, cancel := context.WithTimeout(ctx, cfg.CheckTimeout)
@@ -114,6 +163,7 @@ func waitForChecks(ctx context.Context, op Operator, repo string, number int, cf
 			return checkResult{}, nil
 		}
 
+		progress.SetStatus(waitStatus(fmt.Sprintf("Waiting for CI on PR #%d", number), cfg, start, summarizeChecks(checks)))
 		log.Debug("checks still pending, waiting", "number", number, "interval", cfg.PollInterval)
 		resetTimer(timer, cfg.PollInterval)
 
@@ -129,7 +179,8 @@ func waitForChecks(ctx context.Context, op Operator, repo string, number int, cf
 
 // waitForPostMergeCI polls ListWorkflowRuns on the base branch until all runs for the merge commit complete.
 func waitForPostMergeCI(ctx context.Context, op Operator, repo string, branch string, mergeSHA string, cfg Config, log *slog.Logger, progress Progress) error {
-	progress.SetStatus(fmt.Sprintf("Waiting for post-merge CI on %s", branch))
+	start := time.Now()
+	progress.SetStatus(waitStatus(fmt.Sprintf("Waiting for post-merge CI on %s", branch), cfg, start, ""))
 
 	parentCtx := ctx
 	ctx, cancel := context.WithTimeout(ctx, cfg.PostMergeTimeout)
@@ -162,11 +213,12 @@ func waitForPostMergeCI(ctx context.Context, op Operator, repo string, branch st
 					name       string
 					status     string
 					conclusion string
-				}{r.Name, strings.ToLower(r.Status), strings.ToLower(r.Conclusion)})
+				}{terminal.Sanitize(r.Name), strings.ToLower(r.Status), strings.ToLower(r.Conclusion)})
 			}
 		}
 
 		if len(relevant) == 0 {
+			progress.SetStatus(waitStatus(fmt.Sprintf("Waiting for post-merge CI on %s", branch), cfg, start, "no workflow runs detected yet"))
 			log.Debug("no post-merge runs detected yet, waiting", "branch", branch)
 			resetTimer(timer, cfg.PollInterval)
 			select {
@@ -198,6 +250,18 @@ func waitForPostMergeCI(ctx context.Context, op Operator, repo string, branch st
 			return nil
 		}
 
+		var pending []string
+		for _, r := range relevant {
+			if r.status != "completed" {
+				pending = append(pending, fmt.Sprintf("%s (%s)", r.name, r.status))
+			}
+		}
+		detail := fmt.Sprintf("%d/%d runs complete", len(relevant)-len(pending), len(relevant))
+		if len(pending) > 0 {
+			detail += ", pending: " + strings.Join(pending, ", ")
+		}
+		progress.SetStatus(waitStatus(fmt.Sprintf("Waiting for post-merge CI on %s", branch), cfg, start, detail))
+
 		log.Debug("post-merge CI still running, waiting", "branch", branch)
 		resetTimer(timer, cfg.PollInterval)
 
@@ -213,7 +277,8 @@ func waitForPostMergeCI(ctx context.Context, op Operator, repo string, branch st
 
 // waitForBranchUpdate polls CompareBranches until the PR branch is no longer behind its base.
 func waitForBranchUpdate(ctx context.Context, op Operator, repo string, base string, head string, number int, cfg Config, log *slog.Logger, progress Progress) error {
-	progress.SetStatus(fmt.Sprintf("Waiting for branch update on PR #%d", number))
+	start := time.Now()
+	progress.SetStatus(waitStatus(fmt.Sprintf("Waiting for branch update on PR #%d", number), cfg, start, ""))
 
 	parentCtx := ctx
 	ctx, cancel := context.WithTimeout(ctx, cfg.CheckTimeout)
@@ -240,6 +305,7 @@ func waitForBranchUpdate(ctx context.Context, op Operator, repo string, base str
 			return nil
 		}
 
+		progress.SetStatus(waitStatus(fmt.Sprintf("Waiting for branch update on PR #%d", number), cfg, start, fmt.Sprintf("behind by %d commit(s)", comparison.BehindBy)))
 		log.Debug("branch still behind, waiting for update", "number", number, "behind_by", comparison.BehindBy)
 		resetTimer(timer, cfg.PollInterval)
 

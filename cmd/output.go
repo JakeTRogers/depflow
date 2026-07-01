@@ -6,23 +6,25 @@ import (
 	"strings"
 
 	"github.com/JakeTRogers/depflow/internal/dependabot"
+	"github.com/JakeTRogers/depflow/internal/terminal"
 )
 
 const (
 	noOpenDependabotPRsMessage   = "No open Dependabot pull requests found."
-	noEligiblePRsMessage         = "Nothing to do after excluding major updates."
+	noEligiblePRsMessage         = "Nothing to do after applying filters."
+	excludedPRsHeading           = "Excluded by filters"
 	rerunWithRepoFlagHint        = "rerun with --repo OWNER/REPO"
 	maxDiscoveryPullRequestLimit = 1000
 )
 
-func writeExcludedMajorUpdates(writer io.Writer, heading string, excluded []dependabot.PR) error {
+func writeExcludedPRs(writer io.Writer, heading string, excluded []dependabot.ExcludedPR) error {
 	if _, err := fmt.Fprintf(writer, "%s (%d):\n", heading, len(excluded)); err != nil {
-		return fmt.Errorf("writing excluded major updates heading: %w", err)
+		return fmt.Errorf("writing excluded PRs heading: %w", err)
 	}
 
-	for _, pr := range excluded {
-		if _, err := fmt.Fprintf(writer, "#%d %s\n", pr.Number, sanitize(pr.Title)); err != nil {
-			return fmt.Errorf("writing excluded major updates item: %w", err)
+	for _, ex := range excluded {
+		if _, err := fmt.Fprintf(writer, "#%d %s — %s\n", ex.PR.Number, sanitize(ex.PR.Title), sanitize(ex.Reason)); err != nil {
+			return fmt.Errorf("writing excluded PRs item: %w", err)
 		}
 	}
 
@@ -39,46 +41,7 @@ func rerunWithRepoHint(suffix string) string {
 }
 
 func sanitize(value string) string {
-	if value == "" {
-		return ""
-	}
-
-	var builder strings.Builder
-	builder.Grow(len(value))
-
-	changed := false
-	for i := 0; i < len(value); i++ {
-		if shouldStripControlByte(value[i]) {
-			changed = true
-			continue
-		}
-		builder.WriteByte(value[i])
-	}
-
-	if !changed {
-		return value
-	}
-
-	return builder.String()
-}
-
-func shouldStripControlByte(value byte) bool {
-	switch {
-	case value == '\t', value == '\n', value == '\r':
-		return false
-	case value <= 0x08:
-		return true
-	case value >= 0x0B && value <= 0x0C:
-		return true
-	case value >= 0x0E && value <= 0x1F:
-		return true
-	case value == 0x1B:
-		return true
-	case value == 0x7F:
-		return true
-	default:
-		return false
-	}
+	return terminal.Sanitize(value)
 }
 
 func sanitizeError(err error) string {
