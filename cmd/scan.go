@@ -69,7 +69,7 @@ func writeScannedPR(writer io.Writer, pr dependabot.PR) error {
 	}
 	fmt.Fprintf(&builder, "  classification: ecosystem=%s change=%s grouped=%s dev-tooling=%s infra-sensitive=%s\n",
 		displayOrUnknown(classification.Ecosystem),
-		classification.ChangeKind,
+		classification.EffectiveChangeKind(),
 		yesNo(classification.Grouped),
 		yesNo(classification.DeveloperTooling),
 		yesNo(classification.InfrastructureSensitive))

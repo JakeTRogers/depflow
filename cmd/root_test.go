@@ -357,6 +357,9 @@ func TestPlanCommandChangeKindAllIncludesAllPRs(t *testing.T) {
 	if !strings.Contains(stdout, "2. #9 [major] Bump the npm_and_yarn group with 2 updates") {
 		t.Fatalf("plan output missing included grouped major PR: %q", stdout)
 	}
+	if !strings.Contains(stdout, "signals: ecosystem=npm-and-yarn change=major grouped=yes dev-tooling=no infra-sensitive=no") {
+		t.Fatalf("plan output should report change=major for a grouped PR with a major bump in its body, consistent with the [major] bucket it lands in: %q", stdout)
+	}
 	if strings.Contains(stdout, "Excluded by filters") {
 		t.Fatalf("plan output should not render excluded section with --change-kind=all: %q", stdout)
 	}
@@ -423,6 +426,37 @@ func TestScanCommandShowsGroupedDependencySummary(t *testing.T) {
 	}
 	if strings.Contains(stdout, "dependency: packages-a599cde353") {
 		t.Fatalf("scan output should not fall back to opaque grouped branch slug: %q", stdout)
+	}
+}
+
+func TestScanCommandShowsMajorForGroupedBodyMajorBump(t *testing.T) {
+	t.Parallel()
+
+	lister := &fakeLister{
+		pullRequests: []githubcli.PullRequest{
+			{
+				Number:      9,
+				Title:       "Bump the npm_and_yarn group with 2 updates",
+				Body:        "Updates `next` from 14.2.0 to 15.0.0\nUpdates `react` from 18.3.0 to 18.3.1",
+				URL:         "https://example.test/pr/9",
+				Author:      githubcli.PullRequestAuthor{Login: "dependabot[bot]"},
+				Labels:      []githubcli.PullRequestLabel{{Name: "dependencies"}},
+				HeadRefName: "dependabot/npm_and_yarn/group-frontend-deps",
+				BaseRefName: "main",
+			},
+		},
+	}
+
+	stdout, err := executeTestCommand(t, lister, "scan")
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	// This PR's title has no parseable "from X to Y" range (ChangeKind would otherwise report
+	// "unknown"), but its body contains a major version bump. scan must report change=major here
+	// since that's the same signal plan/execute use to bucket and exclude it as major by default.
+	if !strings.Contains(stdout, "classification: ecosystem=npm-and-yarn change=major grouped=yes dev-tooling=no infra-sensitive=no") {
+		t.Fatalf("scan output should report change=major for a grouped PR with a major bump in its body: %q", stdout)
 	}
 }
 

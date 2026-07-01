@@ -410,3 +410,40 @@ func TestHasMajorVersionBump(t *testing.T) {
 		})
 	}
 }
+
+func TestEffectiveChangeKind(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		classification Classification
+		want           ChangeKind
+	}{
+		{
+			name:           "grouped body major reports as major despite unparseable title",
+			classification: Classification{ChangeKind: ChangeUnknown, Grouped: true, ContainsMajorUpdate: true},
+			want:           ChangeMajor,
+		},
+		{
+			name:           "direct change kind passes through unchanged",
+			classification: Classification{ChangeKind: ChangeMinor},
+			want:           ChangeMinor,
+		},
+		{
+			name:           "unknown without a major signal stays unknown",
+			classification: Classification{ChangeKind: ChangeUnknown},
+			want:           ChangeUnknown,
+		},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := test.classification.EffectiveChangeKind(); got != test.want {
+				t.Fatalf("EffectiveChangeKind() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
