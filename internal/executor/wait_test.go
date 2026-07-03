@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -124,6 +125,94 @@ func TestWaitForChecksTerminalFailureConclusionsReturnErrCheckFailed(t *testing.
 				t.Fatalf("result for %q: got %#v, want %#v", conclusion, result.Failed, []checkFailure{want})
 			}
 		})
+	}
+}
+
+func TestWaitForChecksShowChecksReportsPendingDetail(t *testing.T) {
+	t.Parallel()
+
+	op := &fakeOperator{
+		viewResults: map[int][]githubcli.PRDetail{
+			1: {
+				{Number: 1, State: "OPEN", StatusCheckRollup: []githubcli.StatusCheck{
+					{Name: "build", Conclusion: "success"},
+					{Name: "lint", State: "pending"},
+				}},
+				{Number: 1, State: "OPEN", StatusCheckRollup: []githubcli.StatusCheck{
+					{Name: "build", Conclusion: "success"},
+					{Name: "lint", Conclusion: "success"},
+				}},
+			},
+		},
+		viewErrors:    map[int]error{},
+		mergeErrors:   map[int]error{},
+		commentErrors: map[int]error{},
+		runResults:    map[string][][]githubcli.WorkflowRun{},
+	}
+
+	cfg := testConfig()
+	cfg.ShowChecks = true
+	cfg.ShowTiming = true
+	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	spy := &spyProgress{}
+
+	if _, err := waitForChecks(context.Background(), op, "owner/repo", 1, cfg, log, spy); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	spy.mu.Lock()
+	defer spy.mu.Unlock()
+
+	found := false
+	for _, s := range spy.statuses {
+		if strings.Contains(s, "pending: lint") && strings.Contains(s, "elapsed]") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("statuses = %v, want one with pending check detail and elapsed timing", spy.statuses)
+	}
+}
+
+func TestWaitForChecksShowChecksSanitizesCheckNames(t *testing.T) {
+	t.Parallel()
+
+	maliciousName := "lint\x1b[31m\x07"
+
+	op := &fakeOperator{
+		viewResults: map[int][]githubcli.PRDetail{
+			1: {
+				{Number: 1, State: "OPEN", StatusCheckRollup: []githubcli.StatusCheck{
+					{Name: maliciousName, State: "pending"},
+				}},
+				{Number: 1, State: "OPEN", StatusCheckRollup: []githubcli.StatusCheck{
+					{Name: maliciousName, Conclusion: "success"},
+				}},
+			},
+		},
+		viewErrors:    map[int]error{},
+		mergeErrors:   map[int]error{},
+		commentErrors: map[int]error{},
+		runResults:    map[string][][]githubcli.WorkflowRun{},
+	}
+
+	cfg := testConfig()
+	cfg.ShowChecks = true
+	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	spy := &spyProgress{}
+
+	if _, err := waitForChecks(context.Background(), op, "owner/repo", 1, cfg, log, spy); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	spy.mu.Lock()
+	defer spy.mu.Unlock()
+
+	for _, s := range spy.statuses {
+		if strings.ContainsAny(s, "\x00\x07\x1b\x7f") {
+			t.Fatalf("status %q contains unsanitized terminal control bytes from a GitHub-controlled check name", s)
+		}
 	}
 }
 
@@ -409,6 +498,43 @@ func TestWaitForPostMergeCIReturnsEarlyOnCompletedFailure(t *testing.T) {
 	}
 	if len(op.runResults["main"]) != 0 {
 		t.Fatalf("expected waitForPostMergeCI to stop after first failed poll, remaining polls = %d", len(op.runResults["main"]))
+	}
+}
+
+func TestWaitForPostMergeCIShowChecksSanitizesRunNames(t *testing.T) {
+	t.Parallel()
+
+	maliciousName := "deploy\x1b[31m\x07"
+
+	op := &fakeOperator{
+		viewResults:   map[int][]githubcli.PRDetail{},
+		viewErrors:    map[int]error{},
+		mergeErrors:   map[int]error{},
+		commentErrors: map[int]error{},
+		runResults: map[string][][]githubcli.WorkflowRun{
+			"main": {
+				{{Name: maliciousName, Status: "in_progress", HeadSHA: "abc123"}},
+				{{Name: maliciousName, Status: "completed", Conclusion: "success", HeadSHA: "abc123"}},
+			},
+		},
+	}
+
+	cfg := testConfig()
+	cfg.ShowChecks = true
+	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	spy := &spyProgress{}
+
+	if err := waitForPostMergeCI(context.Background(), op, "owner/repo", "main", "abc123", cfg, log, spy); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	spy.mu.Lock()
+	defer spy.mu.Unlock()
+
+	for _, s := range spy.statuses {
+		if strings.ContainsAny(s, "\x00\x07\x1b\x7f") {
+			t.Fatalf("status %q contains unsanitized terminal control bytes from a GitHub-controlled workflow run name", s)
+		}
 	}
 }
 

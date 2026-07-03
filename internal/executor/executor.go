@@ -53,6 +53,8 @@ type Config struct {
 	CheckTimeout     time.Duration
 	PostMergeDelay   time.Duration
 	PostMergeTimeout time.Duration
+	ShowChecks       bool
+	ShowTiming       bool
 }
 
 type prStatus string
@@ -65,9 +67,10 @@ const (
 
 // PRResult tracks the outcome for a single PR.
 type PRResult struct {
-	Item   planner.PlannedPR
-	Status prStatus
-	Error  error
+	Item     planner.PlannedPR
+	Status   prStatus
+	Error    error
+	Duration time.Duration
 }
 
 // Result is the overall execution outcome.
@@ -112,15 +115,27 @@ func Run(ctx context.Context, op Operator, plan planner.Plan, repo string, cfg C
 
 	result := &Result{}
 	total := len(plan.Items)
+	var itemStart time.Time
 
 	record := func(item planner.PlannedPR, status prStatus, err error, statusText string) {
 		progress.SetStatus(statusText)
 		result.Processed = append(result.Processed, PRResult{
-			Item:   item,
-			Status: status,
-			Error:  err,
+			Item:     item,
+			Status:   status,
+			Error:    err,
+			Duration: time.Since(itemStart),
 		})
 		progress.Increment()
+	}
+
+	updateLastDuration := func(item planner.PlannedPR) {
+		if len(result.Processed) == 0 {
+			return
+		}
+		last := &result.Processed[len(result.Processed)-1]
+		if last.Item.PR.Number == item.PR.Number {
+			last.Duration = time.Since(itemStart)
+		}
 	}
 
 	markLastFailed := func(item planner.PlannedPR, err error, statusText string) {
@@ -130,19 +145,22 @@ func Run(ctx context.Context, op Operator, plan planner.Plan, repo string, cfg C
 			if last.Item.PR.Number == item.PR.Number {
 				last.Status = statusFailed
 				last.Error = err
+				last.Duration = time.Since(itemStart)
 				return
 			}
 		}
 
 		result.Processed = append(result.Processed, PRResult{
-			Item:   item,
-			Status: statusFailed,
-			Error:  err,
+			Item:     item,
+			Status:   statusFailed,
+			Error:    err,
+			Duration: time.Since(itemStart),
 		})
 		progress.Increment()
 	}
 
 	for i, item := range plan.Items {
+		itemStart = time.Now()
 		log.Info("processing PR", "step", i+1, "total", total, "number", item.PR.Number, "title", item.PR.Title)
 
 		progress.SetStatus(fmt.Sprintf("Inspecting PR #%d", item.PR.Number))
@@ -260,6 +278,10 @@ func Run(ctx context.Context, op Operator, plan planner.Plan, repo string, cfg C
 				markLastFailed(item, failedErr, fmt.Sprintf("Failed PR #%d", item.PR.Number))
 				return result, executionFailure(item.PR.Number, failedErr)
 			}
+			updateLastDuration(item)
+		} else {
+			log.Info("last PR in plan, skipping post-merge CI wait", "number", item.PR.Number)
+			progress.SetStatus(fmt.Sprintf("Merged PR #%d (last PR, skipping post-merge CI wait)", item.PR.Number))
 		}
 	}
 
