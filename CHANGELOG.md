@@ -1,3 +1,18 @@
+## v2.0.0 (2026-07-03)
+
+### BREAKING CHANGE
+
+- `-M`/`--include-major` is removed.
+
+### Feat
+
+- replace -M with --change-kind and add classification filters
+- **execute**: surface per-check and timing detail during waits
+
+### Fix
+
+- report change=major for grouped PRs with a body-only major bump
+
 ## v1.2.1 (2026-06-21)
 
 ### Fix
