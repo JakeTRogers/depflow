@@ -126,6 +126,9 @@ func newExecuteCommand(deps commandDeps, opts *commandOptions) *cobra.Command {
 
 	cmd.Flags().BoolVar(&execOpts.dryRun, "dry-run", false, "show planned order without executing")
 	cmd.Flags().StringSliceVar(&execOpts.changeKind, "change-kind", defaultChangeKindValues, "include only these change kinds: patch, minor, major, unknown, or all")
+	if err := cmd.RegisterFlagCompletionFunc("change-kind", changeKindCompletions); err != nil {
+		panic(err)
+	}
 	cmd.Flags().BoolVar(&execOpts.includeDrafts, "include-drafts", false, "include draft Dependabot PRs in execution")
 	cmd.Flags().BoolVar(&execOpts.admin, "admin", false, "bypass branch protection rules using GitHub admin privileges")
 	cmd.Flags().DurationVar(&execOpts.pollInterval, "poll-interval", 30*time.Second, "CI status polling interval")

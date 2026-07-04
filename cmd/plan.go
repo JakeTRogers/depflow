@@ -74,6 +74,9 @@ func newPlanCommand(deps commandDeps, opts *commandOptions) *cobra.Command {
 	}
 
 	cmd.Flags().StringSliceVar(&planOpts.changeKind, "change-kind", defaultChangeKindValues, "include only these change kinds: patch, minor, major, unknown, or all")
+	if err := cmd.RegisterFlagCompletionFunc("change-kind", changeKindCompletions); err != nil {
+		panic(err)
+	}
 	cmd.Flags().BoolVar(&planOpts.includeDrafts, "include-drafts", false, "include draft Dependabot PRs in planning")
 
 	return cmd
