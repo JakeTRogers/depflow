@@ -1,3 +1,9 @@
+## v2.0.1 (2026-07-03)
+
+### Fix
+
+- **cli**: add shell completion for --change-kind values
+
 ## v2.0.0 (2026-07-03)
 
 ### BREAKING CHANGE
