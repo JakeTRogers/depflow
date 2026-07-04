@@ -8,6 +8,7 @@ import (
 
 	"github.com/JakeTRogers/depflow/internal/dependabot"
 	"github.com/JakeTRogers/depflow/internal/githubcli"
+	"github.com/spf13/cobra"
 )
 
 func discoverDependabotPRs(ctx context.Context, deps commandDeps, opts *commandOptions) ([]dependabot.PR, error) {
@@ -81,6 +82,18 @@ func listOpenPullRequestsForDiscovery(ctx context.Context, deps commandDeps, opt
 var defaultChangeKindValues = []string{"patch", "minor", "unknown"}
 
 const changeKindAll = "all"
+
+// changeKindCompletions provides shell completion for the --change-kind flag values.
+var changeKindCompletions = cobra.FixedCompletions(
+	[]string{
+		cobra.CompletionWithDesc("patch", "patch version updates (e.g. 1.2.3 -> 1.2.4)"),
+		cobra.CompletionWithDesc("minor", "minor version updates (e.g. 1.2.3 -> 1.3.0)"),
+		cobra.CompletionWithDesc("major", "major version updates (e.g. 1.2.3 -> 2.0.0)"),
+		cobra.CompletionWithDesc("unknown", "updates whose version bump could not be classified"),
+		cobra.CompletionWithDesc(changeKindAll, "disable change-kind filtering entirely"),
+	},
+	cobra.ShellCompDirectiveNoFileComp,
+)
 
 // parseChangeKinds parses --change-kind flag values into an allow-list. The special value
 // "all" (anywhere in the list) disables change-kind filtering entirely (returns nil, nil).
