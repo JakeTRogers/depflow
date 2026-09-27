@@ -1,11 +1,15 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
+	"time"
 
 	"github.com/JakeTRogers/depflow/internal/dependabot"
+	"github.com/JakeTRogers/depflow/internal/planfile"
 	"github.com/JakeTRogers/depflow/internal/planner"
 	"github.com/spf13/cobra"
 )
@@ -13,6 +17,7 @@ import (
 type planOptions struct {
 	changeKind    []string
 	includeDrafts bool
+	output        string
 }
 
 func newPlanCommand(deps commandDeps, opts *commandOptions) *cobra.Command {
@@ -30,6 +35,10 @@ func newPlanCommand(deps commandDeps, opts *commandOptions) *cobra.Command {
 			prs, err := discoverDependabotPRs(cmd.Context(), deps, opts)
 			if err != nil {
 				return err
+			}
+
+			if planOpts.output != "" {
+				return writePlanFile(cmd, deps, opts, prs, changeKinds, planOpts)
 			}
 
 			filterOpts := buildFilterOptions(opts, changeKinds, planOpts.includeDrafts, true)
@@ -78,6 +87,7 @@ func newPlanCommand(deps commandDeps, opts *commandOptions) *cobra.Command {
 		panic(err)
 	}
 	cmd.Flags().BoolVar(&planOpts.includeDrafts, "include-drafts", false, "include draft Dependabot PRs in planning")
+	cmd.Flags().StringVarP(&planOpts.output, "output", "o", "", "write an editable plan file for `depflow execute --plan` (- for stdout)")
 
 	return cmd
 }
@@ -107,5 +117,54 @@ func writePlannedPR(writer io.Writer, index int, item planner.PlannedPR) error {
 		return fmt.Errorf("writing plan output: %w", err)
 	}
 
+	return nil
+}
+
+// writePlanFile saves an editable plan to planOpts.output ("-" for stdout). Status messages go
+// to stderr when the plan itself is written to stdout.
+func writePlanFile(cmd *cobra.Command, deps commandDeps, opts *commandOptions, prs []dependabot.PR, changeKinds []dependabot.ChangeKind, planOpts *planOptions) error {
+	toStdout := planOpts.output == "-"
+	status := cmd.OutOrStdout()
+	if toStdout {
+		status = cmd.ErrOrStderr()
+	}
+
+	contents := buildPlanFileContents(cmd, prs, opts, changeKinds, planOpts.includeDrafts)
+	if contents.empty() {
+		if len(prs) == 0 {
+			return printLine(status, noOpenDependabotPRsMessage)
+		}
+		return printLine(status, noEligiblePRsMessage)
+	}
+
+	repo, err := resolveRepo(cmd.Context(), deps, opts.repo)
+	if err != nil {
+		return err
+	}
+
+	if toStdout {
+		return planfile.Write(cmd.OutOrStdout(), repo, time.Now(), contents.picks, contents.skips)
+	}
+
+	file, err := os.Create(planOpts.output)
+	if err != nil {
+		return fmt.Errorf("creating plan file: %w", err)
+	}
+	writeErr := planfile.Write(file, repo, time.Now(), contents.picks, contents.skips)
+	if err := errors.Join(writeErr, file.Close()); err != nil {
+		return fmt.Errorf("saving plan file %s: %w", planOpts.output, err)
+	}
+
+	summary := fmt.Sprintf("Wrote plan for %d PR(s) to %s", len(contents.picks), planOpts.output)
+	if len(contents.skips) > 0 {
+		summary += fmt.Sprintf(" (%d more listed as skip)", len(contents.skips))
+	}
+	repoFlag := ""
+	if opts.repo != "" {
+		repoFlag = " --repo " + opts.repo
+	}
+	if _, err := fmt.Fprintf(status, "%s.\nEdit it, then run: depflow%s execute --plan %s\n", summary, repoFlag, planOpts.output); err != nil {
+		return fmt.Errorf("writing plan output: %w", err)
+	}
 	return nil
 }

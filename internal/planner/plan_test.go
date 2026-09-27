@@ -151,6 +151,56 @@ func TestSelectBucketTreatsAnyMajorSignalAsMajor(t *testing.T) {
 	}
 }
 
+func TestBuildOrderedFollowsGivenOrder(t *testing.T) {
+	t.Parallel()
+
+	prs := []dependabot.PR{
+		newPR(1, "ci", dependabot.Classification{ChangeKind: dependabot.ChangePatch, Ecosystem: "github-actions", CI: true}),
+		newPR(2, "patch", dependabot.Classification{ChangeKind: dependabot.ChangePatch}),
+		newPR(3, "major", dependabot.Classification{ChangeKind: dependabot.ChangeMajor}),
+		newPR(4, "minor", dependabot.Classification{ChangeKind: dependabot.ChangeMinor}),
+	}
+
+	tests := []struct {
+		name  string
+		order []int
+		want  []int
+	}{
+		{name: "explicit order", order: []int{3, 1, 4, 2}, want: []int{3, 1, 4, 2}},
+		{name: "unlisted PRs keep planner order after listed ones", order: []int{4}, want: []int{4, 1, 2, 3}},
+		{name: "unknown numbers ignored", order: []int{99, 2, 1}, want: []int{2, 1, 4, 3}},
+		{name: "empty order matches Build", order: nil, want: []int{1, 2, 4, 3}},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			plan := BuildOrdered(prs, test.order)
+			if got := planNumbers(plan); !reflect.DeepEqual(got, test.want) {
+				t.Fatalf("order = %#v, want %#v", got, test.want)
+			}
+		})
+	}
+}
+
+func TestBuildOrderedKeepsBucketAndReason(t *testing.T) {
+	t.Parallel()
+
+	plan := BuildOrdered([]dependabot.PR{
+		newPR(1, "patch", dependabot.Classification{ChangeKind: dependabot.ChangePatch}),
+		newPR(2, "major", dependabot.Classification{ChangeKind: dependabot.ChangeMajor}),
+	}, []int{2, 1})
+
+	if plan.Items[0].Bucket != BucketMajor {
+		t.Fatalf("first bucket = %q, want %q", plan.Items[0].Bucket, BucketMajor)
+	}
+	if plan.Items[0].Reason != "major update sorts last" {
+		t.Fatalf("first reason = %q", plan.Items[0].Reason)
+	}
+}
+
 func newPR(number int, title string, classification dependabot.Classification) dependabot.PR {
 	return dependabot.PR{
 		Number:         number,

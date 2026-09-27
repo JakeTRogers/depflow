@@ -99,6 +99,32 @@ func Build(prs []dependabot.PR) Plan {
 	return Plan{Items: items}
 }
 
+// BuildOrdered classifies prs like Build but orders the plan by the PR numbers in order.
+// PRs whose numbers are absent from order keep their Build order after all ordered PRs.
+func BuildOrdered(prs []dependabot.PR, order []int) Plan {
+	plan := Build(prs)
+
+	position := make(map[int]int, len(order))
+	for index, number := range order {
+		if _, seen := position[number]; !seen {
+			position[number] = index
+		}
+	}
+
+	rank := func(item PlannedPR) int {
+		if index, ok := position[item.PR.Number]; ok {
+			return index
+		}
+		return len(order)
+	}
+
+	sort.SliceStable(plan.Items, func(i, j int) bool {
+		return rank(plan.Items[i]) < rank(plan.Items[j])
+	})
+
+	return plan
+}
+
 func selectBucket(classification dependabot.Classification) Bucket {
 	switch {
 	case classification.HasMajorVersionBump():

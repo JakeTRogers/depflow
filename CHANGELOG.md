@@ -1,3 +1,9 @@
+## v2.1.0 (2026-09-26)
+
+### Feat
+
+- **execute**: add editable plan files (--edit, --plan, plan -o)
+
 ## v2.0.2 (2026-09-07)
 
 ### Fix

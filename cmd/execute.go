@@ -26,6 +26,8 @@ type executeOptions struct {
 	postMergeTimeout time.Duration
 	showChecks       bool
 	showTiming       bool
+	edit             bool
+	planPath         string
 }
 
 const minPollInterval = 5 * time.Second
@@ -41,9 +43,28 @@ func newExecuteCommand(deps commandDeps, opts *commandOptions) *cobra.Command {
 				return err
 			}
 
+			if execOpts.planPath != "" {
+				if err := rejectFilterFlagsWithPlanFile(cmd); err != nil {
+					return err
+				}
+				res, repo, err := planFromFile(cmd, deps, opts, execOpts.planPath)
+				if err != nil {
+					return err
+				}
+				return runResolvedPlanFile(cmd, deps, opts, execOpts, res, repo, true)
+			}
+
 			changeKinds, err := parseChangeKinds(execOpts.changeKind)
 			if err != nil {
 				return err
+			}
+
+			if execOpts.edit {
+				res, repo, ok, err := planFromEditor(cmd, deps, opts, changeKinds, execOpts.includeDrafts)
+				if err != nil || !ok {
+					return err
+				}
+				return runResolvedPlanFile(cmd, deps, opts, execOpts, res, repo, false)
 			}
 
 			prs, err := discoverDependabotPRs(cmd.Context(), deps, opts)
@@ -77,54 +98,20 @@ func newExecuteCommand(deps commandDeps, opts *commandOptions) *cobra.Command {
 				return nil
 			}
 
-			if execOpts.dryRun {
-				if len(excluded) > 0 {
-					if _, err := fmt.Fprintln(cmd.OutOrStdout()); err != nil {
-						return fmt.Errorf("writing execute output spacing: %w", err)
-					}
-				}
-				return printDryRun(cmd.OutOrStdout(), plan)
-			}
-
 			if len(excluded) > 0 {
 				if _, err := fmt.Fprintln(cmd.OutOrStdout()); err != nil {
 					return fmt.Errorf("writing execute output spacing: %w", err)
 				}
 			}
 
-			cfg := executor.Config{
-				Admin:            execOpts.admin,
-				PollInterval:     execOpts.pollInterval,
-				CheckTimeout:     execOpts.checkTimeout,
-				PostMergeDelay:   execOpts.postMergeDelay,
-				PostMergeTimeout: execOpts.postMergeTimeout,
-				ShowChecks:       execOpts.showChecks,
-				ShowTiming:       execOpts.showTiming,
-			}
-
-			repo, err := resolveExecuteRepo(cmd.Context(), deps, opts.repo)
-			if err != nil {
-				return err
-			}
-
-			ui := progress.NewTracker(cmd.ErrOrStderr(), len(plan.Items))
-			verbosity := progress.FromCount(opts.verbosity)
-			log := progress.NewLogger(ui.LogWriter(), verbosity)
-
-			result, err := executor.Run(cmd.Context(), deps.operator, plan, repo, cfg, log, ui)
-
-			ui.Stop()
-			if printErr := printResult(cmd.OutOrStdout(), result, execOpts.showTiming); printErr != nil {
-				if err != nil {
-					return errors.Join(err, printErr)
-				}
-				return printErr
-			}
-			return err
+			return runPlan(cmd, deps, opts, execOpts, plan, "")
 		},
 	}
 
 	cmd.Flags().BoolVar(&execOpts.dryRun, "dry-run", false, "show planned order without executing")
+	cmd.Flags().BoolVar(&execOpts.edit, "edit", false, "edit the plan in $VISUAL/$EDITOR before executing (reorder lines, pick or skip PRs)")
+	cmd.Flags().StringVar(&execOpts.planPath, "plan", "", "execute a plan file written by `depflow plan -o` (- reads stdin)")
+	cmd.MarkFlagsMutuallyExclusive("edit", "plan")
 	cmd.Flags().StringSliceVar(&execOpts.changeKind, "change-kind", defaultChangeKindValues, "include only these change kinds: patch, minor, major, unknown, or all")
 	if err := cmd.RegisterFlagCompletionFunc("change-kind", changeKindCompletions); err != nil {
 		panic(err)
@@ -139,6 +126,73 @@ func newExecuteCommand(deps commandDeps, opts *commandOptions) *cobra.Command {
 	cmd.Flags().BoolVar(&execOpts.showTiming, "show-timing", false, "show elapsed wait time and per-PR duration")
 
 	return cmd
+}
+
+// runResolvedPlanFile reports what changed since a plan file was written, then dry-runs or
+// executes it in file order.
+func runResolvedPlanFile(cmd *cobra.Command, deps commandDeps, opts *commandOptions, execOpts *executeOptions, res planFileResolution, repo string, reportUnlisted bool) error {
+	out := cmd.OutOrStdout()
+	if err := writePlanFileNotices(out, res, reportUnlisted); err != nil {
+		return err
+	}
+
+	if res.picked == 0 {
+		return printLine(out, noPickLinesMessage)
+	}
+	if len(res.plan.Items) == 0 {
+		return printLine(out, noOpenPickedPRsMessage)
+	}
+
+	// Bucket reasons describe the planner's ordering, which the file overrides, so list only
+	// the file order.
+	if execOpts.dryRun {
+		return printPlanOrder(out, fmt.Sprintf(dryRunHeaderFormat, len(res.plan.Items)), res.plan)
+	}
+	if err := printPlanOrder(out, fmt.Sprintf("Processing %d PR(s) in this order:\n", len(res.plan.Items)), res.plan); err != nil {
+		return err
+	}
+
+	return runPlan(cmd, deps, opts, execOpts, res.plan, repo)
+}
+
+// runPlan dry-runs or executes plan. An empty repo is resolved only when executing.
+func runPlan(cmd *cobra.Command, deps commandDeps, opts *commandOptions, execOpts *executeOptions, plan planner.Plan, repo string) error {
+	if execOpts.dryRun {
+		return printDryRun(cmd.OutOrStdout(), plan)
+	}
+
+	if repo == "" {
+		resolved, err := resolveRepo(cmd.Context(), deps, opts.repo)
+		if err != nil {
+			return err
+		}
+		repo = resolved
+	}
+
+	cfg := executor.Config{
+		Admin:            execOpts.admin,
+		PollInterval:     execOpts.pollInterval,
+		CheckTimeout:     execOpts.checkTimeout,
+		PostMergeDelay:   execOpts.postMergeDelay,
+		PostMergeTimeout: execOpts.postMergeTimeout,
+		ShowChecks:       execOpts.showChecks,
+		ShowTiming:       execOpts.showTiming,
+	}
+
+	ui := progress.NewTracker(cmd.ErrOrStderr(), len(plan.Items))
+	verbosity := progress.FromCount(opts.verbosity)
+	log := progress.NewLogger(ui.LogWriter(), verbosity)
+
+	result, err := executor.Run(cmd.Context(), deps.operator, plan, repo, cfg, log, ui)
+
+	ui.Stop()
+	if printErr := printResult(cmd.OutOrStdout(), result, execOpts.showTiming); printErr != nil {
+		if err != nil {
+			return errors.Join(err, printErr)
+		}
+		return printErr
+	}
+	return err
 }
 
 func validateExecuteOptions(opts *executeOptions) error {
@@ -171,7 +225,7 @@ func validateExecuteOptions(opts *executeOptions) error {
 	return nil
 }
 
-func resolveExecuteRepo(ctx context.Context, deps commandDeps, repo string) (string, error) {
+func resolveRepo(ctx context.Context, deps commandDeps, repo string) (string, error) {
 	if strings.TrimSpace(repo) != "" {
 		return repo, nil
 	}
@@ -193,8 +247,10 @@ func resolveExecuteRepo(ctx context.Context, deps commandDeps, repo string) (str
 	return resolvedRepo, nil
 }
 
+const dryRunHeaderFormat = "Dry run: %d PR(s) would be processed in this order:\n\n"
+
 func printDryRun(w io.Writer, plan planner.Plan) error {
-	if _, err := fmt.Fprintf(w, "Dry run: %d PR(s) would be processed in this order:\n\n", len(plan.Items)); err != nil {
+	if _, err := fmt.Fprintf(w, dryRunHeaderFormat, len(plan.Items)); err != nil {
 		return fmt.Errorf("writing dry run header: %w", err)
 	}
 	for i, item := range plan.Items {
@@ -203,6 +259,18 @@ func printDryRun(w io.Writer, plan planner.Plan) error {
 		}
 		if _, err := fmt.Fprintf(w, "   reason: %s\n", sanitize(item.Reason)); err != nil {
 			return fmt.Errorf("writing dry run reason: %w", err)
+		}
+	}
+	return nil
+}
+
+func printPlanOrder(w io.Writer, header string, plan planner.Plan) error {
+	if _, err := io.WriteString(w, header); err != nil {
+		return fmt.Errorf("writing plan order header: %w", err)
+	}
+	for i, item := range plan.Items {
+		if _, err := fmt.Fprintf(w, "%d. #%d [%s] %s\n", i+1, item.PR.Number, item.Bucket, sanitize(item.PR.Title)); err != nil {
+			return fmt.Errorf("writing plan order item: %w", err)
 		}
 	}
 	return nil
