@@ -29,6 +29,7 @@ type commandDeps struct {
 	lister   prLister
 	operator prOperator
 	resolver repoResolver
+	editor   planEditor
 }
 
 type commandOptions struct {
@@ -56,6 +57,7 @@ func defaultDeps() (commandDeps, error) {
 		lister:   client,
 		operator: client,
 		resolver: client,
+		editor:   newTerminalEditor(),
 	}, nil
 }
 

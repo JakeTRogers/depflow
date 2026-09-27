@@ -15,6 +15,7 @@ Go CLI that discovers open Dependabot pull requests, plans a deterministic proce
 - `main.go` → `cmd/` — Cobra wiring: `root.go` (global flags, dependency injection via `commandDeps`, signal-aware `ExecuteContext`), `scan.go`, `plan.go`, `execute.go`, `version.go`, plus `discovery.go` (PR discovery shared by all three commands) and `output.go` (rendering).
 - `internal/dependabot/` — normalizes PRs and classifies them (ecosystem, change kind, grouping, dev-tooling, infra-sensitive); shared `--change-kind`/ecosystem/dependency/label filters live in `filter.go`. Grouped PRs count as `major` when the PR body contains a major bump.
 - `internal/planner/` — deterministic bucket ordering: ci → developer-tooling → patch → minor → grouped → unknown → infra-sensitive → major, with defined tie-breaking.
+- `internal/planfile/` — renders/parses `git rebase -i`-style plan files (`pick`/`skip` lines) for `plan -o`, `execute --edit`, `execute --plan`; `cmd/planfile.go` resolves picks against freshly discovered Dependabot PRs so a file can never merge anything else.
 - `internal/executor/` — sequential stop-on-first-failure processing loop; polling helpers in `wait.go`; sentinel errors in `errors.go`.
 - `internal/githubcli/` — thin `gh` subprocess wrapper (list/view/approve/merge/comment/compare/runs); sets `GH_PAGER=""` and resolves the `gh` binary once.
 - `internal/progress/` — mpb live progress tracker plus verbosity-filtered slog logger that writes above the bar.

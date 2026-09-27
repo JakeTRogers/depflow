@@ -33,6 +33,8 @@ Lists open Dependabot pull requests with metadata including classification signa
 
 Shows deterministic classification and the preferred processing order. By default, `plan` excludes major version updates and drafts from the planned queue and lists them separately under `Excluded by filters` along with the reason each was excluded. Grouped summary PRs are also treated as major when their PR body contains a major version bump. Included PRs are sorted into buckets — ci, developer-tooling, patch, minor, grouped, unknown, infra-sensitive, major — so that lower-risk updates are processed first.
 
+- `-o, --output FILE` — write an [editable plan file](#editing-the-plan) instead of the listing (`-` writes it to stdout)
+
 ### execute
 
 Processes Dependabot PRs in planned order with a live progress display. By default, `execute` excludes major version updates and drafts, reports them before execution, and only processes the remaining queue. If every discovered PR is excluded, the command exits without mutating anything and prints `Nothing to do after applying filters.`. For each included PR the command:
@@ -54,6 +56,8 @@ If the process receives `SIGINT` or `SIGTERM`, depflow cancels the active execut
 #### Execute Flags
 
 - `--dry-run` — show planned order without executing
+- `--edit` — open the plan in your editor before executing; see [Editing the plan](#editing-the-plan)
+- `--plan FILE` — execute a plan file written by `depflow plan -o` (`-` reads stdin); cannot be combined with `--edit`, `--limit`, `--change-kind`, `--include-drafts`, or the classification filters
 - `--change-kind` — include only these change kinds in execution (default: `patch,minor,unknown`)
 - `--include-drafts` — include draft Dependabot PRs in execution
 - `--admin` — bypass branch protection rules using GitHub admin privileges
@@ -65,6 +69,41 @@ If the process receives `SIGINT` or `SIGTERM`, depflow cancels the active execut
 - `--show-timing` — show elapsed wait time on the progress line and per-PR duration in the execution summary
 
 All execute duration flags must be greater than zero. `--poll-interval` must be at least 5 seconds. `--check-timeout` and `--post-merge-timeout` must be greater than `--poll-interval`.
+
+### Editing the plan
+
+To exclude specific PRs, pull in one the default filters left out, or change the processing order, edit the plan as a text file, much like a `git rebase -i` todo list:
+
+```bash
+depflow execute --edit                 # open the plan in your editor, then execute what you save
+depflow plan -o plan.txt               # or save it, edit it, and run it later
+depflow execute --plan plan.txt
+```
+
+```text
+repo owner/repo
+#
+# depflow plan, generated 2026-09-27T14:03:00Z
+# Lines run top to bottom; reorder them to change the order.
+#   pick, p          = process this PR
+#   skip, s, drop, d = leave this PR alone (deleting the line also skips it)
+# Save with no pick lines to abort.
+
+pick #31 [ci] Bump actions/checkout from 7.0.0 to 7.0.1
+pick #28 [patch] Bump golang.org/x/sys from 0.46.0 to 0.47.0
+pick #22 [minor] Bump github.com/spf13/cobra from 1.9.0 to 1.10.2
+
+# Excluded by default filters. Change "skip" to "pick" to include:
+skip #40 [major] Bump foo from 1.4.0 to 2.0.0  # change-kind "major" not in --change-kind allow-list
+```
+
+- PRs run in the order of their `pick` lines. The command and PR number control execution. The optional bucket is parsed as metadata for bucket-drift warnings, while the title is informational; changing the bucket does not change execution order.
+- PRs held back only by the default `--change-kind` and draft filters are listed as `skip` lines so you can include them. PRs removed by filters you pass explicitly (for example `--exclude-ecosystem npm-and-yarn` or `--change-kind patch`) are left out of the file.
+- Before anything is changed, every picked PR is checked against the currently open Dependabot PRs. Picks that aren't open Dependabot PRs (merged since the plan was written, or never from Dependabot) are reported under `Not processed` and skipped, so a stale or hand-edited plan can never merge anything else.
+- The `repo` line must match the target repository (`--repo`, or the one `gh` infers).
+- When running a saved plan, depflow warns if a PR's bucket has changed since the plan was written (for example, Dependabot moved it to a new major version) and reports how many open Dependabot PRs the file doesn't list. Those PRs are left alone.
+- The editor is `$VISUAL`, then `$EDITOR`, then `vi` (`notepad` on Windows). Exiting the editor with an error aborts. If the edited plan can't be parsed, depflow keeps the file and prints its path so you can fix it and rerun with `--plan`.
+- `--edit` needs an interactive terminal. In scripts, use `plan -o` and `execute --plan`.
 
 ### version
 
@@ -116,6 +155,9 @@ depflow --repo owner/repo execute --exclude-label do-not-merge --require-label d
 depflow -v --repo owner/repo execute
 depflow -vv --repo owner/repo execute --poll-interval 15s --check-timeout 10m
 depflow --repo owner/repo execute --show-checks --show-timing
+depflow --repo owner/repo execute --edit --dry-run
+depflow --repo owner/repo plan -o plan.txt
+depflow --repo owner/repo execute --plan plan.txt
 depflow version
 ```
 
@@ -139,6 +181,7 @@ depflow completion fish | source
 - `cmd/` — Cobra command wiring (root, scan, plan, execute, version, discovery helpers)
 - `internal/dependabot/` — PR normalization (classify ecosystem, change kind, grouping, dev-tooling, infra-sensitive signals)
 - `internal/planner/` — Deterministic bucket-based ordering with tie-breaking by change kind, ecosystem, dependency name, title, and PR number
+- `internal/planfile/` — Renders and parses editable plan files (`pick`/`skip` lines) used by `plan -o`, `execute --edit`, and `execute --plan`
 - `internal/executor/` — Sequential PR processing loop with Operator interface (dependency injection), approval before merge, and polling helpers for CI checks, branch updates, and post-merge CI
 - `internal/githubcli/` — Thin `gh` CLI wrapper: list PRs, view PR details, approve, merge, comment, compare branches, list workflow runs
 - `internal/progress/` — mpb-based live progress tracker with verbosity-controlled slog logger
