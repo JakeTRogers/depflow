@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/JakeTRogers/depflow/internal/config"
 	"github.com/JakeTRogers/depflow/internal/githubcli"
 	"github.com/JakeTRogers/depflow/internal/planner"
 )
@@ -29,7 +30,8 @@ var sleepFunc = func(ctx context.Context, delay time.Duration) error {
 type Operator interface {
 	ViewPullRequest(ctx context.Context, repo string, number int) (githubcli.PRDetail, error)
 	ApprovePullRequest(ctx context.Context, repo string, number int) error
-	MergePullRequest(ctx context.Context, repo string, number int, admin bool) error
+	MergePullRequest(ctx context.Context, repo string, number int, admin bool, method string) error
+	CheckMergeAllowed(ctx context.Context, repo string, number int, method string) error
 	CommentOnPR(ctx context.Context, repo string, number int, body string) error
 	ListWorkflowRuns(ctx context.Context, repo string, branch string) ([]githubcli.WorkflowRun, error)
 	CompareBranches(ctx context.Context, repo string, base string, head string) (githubcli.BranchComparison, error)
@@ -48,6 +50,7 @@ func (nopProgress) Increment()       {}
 
 // Config controls executor admin override, polling, and timeout behavior.
 type Config struct {
+	MergeMethod      string
 	Admin            bool
 	PollInterval     time.Duration
 	CheckTimeout     time.Duration
@@ -106,6 +109,12 @@ func executionFailure(number int, err error) error {
 // Run processes each PR in plan order: update -> wait CI -> merge -> wait post-merge CI.
 // It stops on the first failure and returns all results up to that point.
 func Run(ctx context.Context, op Operator, plan planner.Plan, repo string, cfg Config, log *slog.Logger, progress Progress) (*Result, error) {
+	if cfg.MergeMethod == "" {
+		cfg.MergeMethod = "merge"
+	}
+	if err := config.ValidateMethod(cfg.MergeMethod); err != nil {
+		return &Result{}, err
+	}
 	if progress == nil {
 		progress = nopProgress{}
 	}
@@ -175,6 +184,10 @@ func Run(ctx context.Context, op Operator, plan planner.Plan, repo string, cfg C
 			record(item, statusSkipped, nil, fmt.Sprintf("Skipped PR #%d", item.PR.Number))
 			continue
 		}
+		if err := op.CheckMergeAllowed(ctx, repo, item.PR.Number, cfg.MergeMethod); err != nil {
+			record(item, statusFailed, err, fmt.Sprintf("Failed PR #%d", item.PR.Number))
+			return result, executionFailure(item.PR.Number, err)
+		}
 
 		progress.SetStatus(fmt.Sprintf("Checking branch state for PR #%d", item.PR.Number))
 		comparison, err := op.CompareBranches(ctx, repo, detail.BaseRefName, detail.HeadRefName)
@@ -235,6 +248,11 @@ func Run(ctx context.Context, op Operator, plan planner.Plan, repo string, cfg C
 			return result, executionFailure(item.PR.Number, mergeErr)
 		}
 
+		if err := op.CheckMergeAllowed(ctx, repo, item.PR.Number, cfg.MergeMethod); err != nil {
+			record(item, statusFailed, err, fmt.Sprintf("Failed PR #%d", item.PR.Number))
+			return result, executionFailure(item.PR.Number, err)
+		}
+
 		progress.SetStatus(fmt.Sprintf("Approving PR #%d", item.PR.Number))
 		if err := op.ApprovePullRequest(ctx, repo, item.PR.Number); err != nil {
 			record(item, statusFailed, err, fmt.Sprintf("Failed PR #%d", item.PR.Number))
@@ -242,7 +260,7 @@ func Run(ctx context.Context, op Operator, plan planner.Plan, repo string, cfg C
 		}
 
 		progress.SetStatus(fmt.Sprintf("Merging PR #%d", item.PR.Number))
-		if err := op.MergePullRequest(ctx, repo, item.PR.Number, cfg.Admin); err != nil {
+		if err := op.MergePullRequest(ctx, repo, item.PR.Number, cfg.Admin, cfg.MergeMethod); err != nil {
 			record(item, statusFailed, err, fmt.Sprintf("Failed PR #%d", item.PR.Number))
 			return result, fmt.Errorf("merging PR #%d: %w", item.PR.Number, err)
 		}

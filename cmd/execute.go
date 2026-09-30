@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/JakeTRogers/depflow/internal/config"
 	"github.com/JakeTRogers/depflow/internal/dependabot"
 	"github.com/JakeTRogers/depflow/internal/executor"
 	"github.com/JakeTRogers/depflow/internal/planner"
@@ -16,6 +17,8 @@ import (
 )
 
 type executeOptions struct {
+	mergeMethod      string
+	preferences      config.Document
 	dryRun           bool
 	changeKind       []string
 	includeDrafts    bool
@@ -40,6 +43,14 @@ func newExecuteCommand(deps commandDeps, opts *commandOptions) *cobra.Command {
 		Short: "Process Dependabot PRs in planned order",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if err := validateExecuteOptions(execOpts); err != nil {
+				return err
+			}
+			document, _, err := loadPreferences(opts)
+			if err != nil {
+				return err
+			}
+			execOpts.preferences = document
+			if _, err := document.Resolve("", execOpts.mergeMethod, cmd.Flags().Changed("merge-method")); err != nil {
 				return err
 			}
 
@@ -109,6 +120,10 @@ func newExecuteCommand(deps commandDeps, opts *commandOptions) *cobra.Command {
 	}
 
 	cmd.Flags().BoolVar(&execOpts.dryRun, "dry-run", false, "show planned order without executing")
+	cmd.Flags().StringVar(&execOpts.mergeMethod, "merge-method", "", "PR merge method: merge, squash, rebase (flag > environment > repo > global > merge)")
+	if err := cmd.RegisterFlagCompletionFunc("merge-method", mergeMethodCompletions(deps, opts)); err != nil {
+		panic(err)
+	}
 	cmd.Flags().BoolVar(&execOpts.edit, "edit", false, "edit the plan in $VISUAL/$EDITOR before executing (reorder lines, pick or skip PRs)")
 	cmd.Flags().StringVar(&execOpts.planPath, "plan", "", "execute a plan file written by `depflow plan -o` (- reads stdin)")
 	cmd.MarkFlagsMutuallyExclusive("edit", "plan")
@@ -146,7 +161,11 @@ func runResolvedPlanFile(cmd *cobra.Command, deps commandDeps, opts *commandOpti
 	// Bucket reasons describe the planner's ordering, which the file overrides, so list only
 	// the file order.
 	if execOpts.dryRun {
-		return printPlanOrder(out, fmt.Sprintf(dryRunHeaderFormat, len(res.plan.Items)), res.plan)
+		if err := printPlanOrder(out, fmt.Sprintf(dryRunHeaderFormat, len(res.plan.Items)), res.plan); err != nil {
+			return err
+		}
+		_, _, err := prepareMerge(cmd, deps, opts, execOpts, res.plan, repo)
+		return err
 	}
 	if err := printPlanOrder(out, fmt.Sprintf("Processing %d PR(s) in this order:\n", len(res.plan.Items)), res.plan); err != nil {
 		return err
@@ -158,18 +177,17 @@ func runResolvedPlanFile(cmd *cobra.Command, deps commandDeps, opts *commandOpti
 // runPlan dry-runs or executes plan. An empty repo is resolved only when executing.
 func runPlan(cmd *cobra.Command, deps commandDeps, opts *commandOptions, execOpts *executeOptions, plan planner.Plan, repo string) error {
 	if execOpts.dryRun {
-		return printDryRun(cmd.OutOrStdout(), plan)
-	}
-
-	if repo == "" {
-		resolved, err := resolveRepo(cmd.Context(), deps, opts.repo)
-		if err != nil {
+		if err := printDryRun(cmd.OutOrStdout(), plan); err != nil {
 			return err
 		}
-		repo = resolved
+	}
+	method, repo, err := prepareMerge(cmd, deps, opts, execOpts, plan, repo)
+	if err != nil || execOpts.dryRun {
+		return err
 	}
 
 	cfg := executor.Config{
+		MergeMethod:      method.Value,
 		Admin:            execOpts.admin,
 		PollInterval:     execOpts.pollInterval,
 		CheckTimeout:     execOpts.checkTimeout,

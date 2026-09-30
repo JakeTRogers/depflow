@@ -4,15 +4,20 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+
+	"github.com/JakeTRogers/depflow/internal/config"
 )
 
-// MergePullRequest merge-commits the PR and deletes the head branch.
-func (c *client) MergePullRequest(ctx context.Context, repo string, number int, admin bool) error {
+// MergePullRequest merges the PR using the selected method and deletes the head branch.
+func (c *client) MergePullRequest(ctx context.Context, repo string, number int, admin bool, method string) error {
+	if err := config.ValidateMethod(method); err != nil {
+		return err
+	}
 	args := []string{
 		"pr",
 		"merge",
 		strconv.Itoa(number),
-		"--merge",
+		"--" + method,
 		"--delete-branch",
 	}
 	if admin {

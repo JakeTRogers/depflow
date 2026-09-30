@@ -140,18 +140,18 @@ func TestGHExecutorRunNotFound(t *testing.T) {
 func TestResolveRepo(t *testing.T) {
 	t.Parallel()
 
-	executor := &stubExecutor{output: []byte(`{"nameWithOwner":"owner/repo"}`)}
+	executor := &stubExecutor{output: []byte(`{"url":"https://git.example.com/owner/repo"}`)}
 	client := newClient(executor)
 
 	repo, err := client.ResolveRepo(context.Background())
 	if err != nil {
 		t.Fatalf("ResolveRepo() error = %v", err)
 	}
-	if repo != "owner/repo" {
-		t.Fatalf("repo = %q, want owner/repo", repo)
+	if repo != "git.example.com/owner/repo" {
+		t.Fatalf("repo = %q, want git.example.com/owner/repo", repo)
 	}
 
-	wantArgs := []string{"repo", "view", "--json", "nameWithOwner"}
+	wantArgs := []string{"repo", "view", "--json", "url"}
 	if len(executor.calls) != 1 {
 		t.Fatalf("len(calls) = %d, want 1", len(executor.calls))
 	}
