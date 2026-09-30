@@ -1,3 +1,9 @@
+## v2.2.0 (2026-09-29)
+
+### Feat
+
+- add configurable merge methods and repository preferences
+
 ## v2.1.0 (2026-09-26)
 
 ### Feat
