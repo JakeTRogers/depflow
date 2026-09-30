@@ -167,7 +167,7 @@ func classify(title, body, headRef string, labels []string) Classification {
 	if grouped {
 		containsMajorUpdate = containsGroupedMajorUpdate(body)
 	}
-	signalText := buildSignalText(title, headRef, labels, ecosystem, dependencyName)
+	signalText := dependencySignalText(title)
 	devMatches := matchKeywords(signalText, devToolingKeywords)
 	infraMatches := matchKeywords(signalText, infraSensitiveKeywords)
 
@@ -307,11 +307,14 @@ func humanizeGroupName(groupName string) string {
 	return strings.Join(strings.Fields(replacer.Replace(strings.TrimSpace(groupName))), " ")
 }
 
-func buildSignalText(title, headRef string, labels []string, ecosystem, dependencyName string) string {
-	parts := make([]string, 0, 4+len(labels))
-	parts = append(parts, title, headRef, ecosystem, dependencyName)
-	parts = append(parts, labels...)
-	return strings.ToLower(strings.Join(parts, "\n"))
+func dependencySignalText(title string) string {
+	if match, ok := parseGroupedTitle(title); ok {
+		return strings.ToLower(match.leadDependency)
+	}
+	if matches := bumpTitlePattern.FindStringSubmatch(stripConventionalCommitPrefix(title)); len(matches) == 2 {
+		return strings.ToLower(strings.TrimSpace(matches[1]))
+	}
+	return ""
 }
 
 func matchKeywords(signalText string, keywords []string) []string {

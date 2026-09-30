@@ -215,14 +215,28 @@ func TestPlanCommandOrdersPRs(t *testing.T) {
 		t.Fatalf("Execute() error = %v", err)
 	}
 
-	first := strings.Index(stdout, "1. #1 [ci]")
-	second := strings.Index(stdout, "2. #2 [patch]")
-	third := strings.Index(stdout, "3. #5 [grouped]")
+	compact := strings.Join(strings.Fields(stdout), " ")
+	first := strings.Index(compact, "1 #1 ci github-actions actions/cache patch")
+	second := strings.Index(compact, "2 #2 patch go-modules github.com/google/uuid patch")
+	third := strings.Index(compact, "3 #5 grouped npm-and-yarn lodash (frontend group) unknown")
 	if first == -1 || second == -1 || third == -1 {
 		t.Fatalf("plan output missing expected order markers: %q", stdout)
 	}
 	if first >= second || second >= third {
 		t.Fatalf("plan output order is not deterministic: %q", stdout)
+	}
+	if strings.Contains(stdout, "signals:") || strings.Contains(stdout, "reason:") || strings.Contains(stdout, "url:") {
+		t.Fatalf("default plan should not include detailed records: %q", stdout)
+	}
+	stdout, err = executeTestCommand(t, lister, "plan", "--details")
+	if err != nil {
+		t.Fatalf("Execute() with --details error = %v", err)
+	}
+	first = strings.Index(stdout, "1. #1 [ci]")
+	second = strings.Index(stdout, "2. #2 [patch]")
+	third = strings.Index(stdout, "3. #5 [grouped]")
+	if first == -1 || second <= first || third <= second {
+		t.Fatalf("detailed output must preserve the compact order: %q", stdout)
 	}
 	if !strings.Contains(stdout, "reason: grouped update sorts after simple low-risk updates") {
 		t.Fatalf("plan output missing grouped rationale: %q", stdout)
@@ -262,7 +276,7 @@ func TestPlanCommandGroupedSummaryWithoutParseableVersionsRemainsIncluded(t *tes
 	if !strings.Contains(stdout, "Planned order for 1 Dependabot pull request(s)") {
 		t.Fatalf("plan output missing grouped summary plan header: %q", stdout)
 	}
-	if !strings.Contains(stdout, "1. #13 [grouped] Bump the npm_and_yarn group with 2 updates") {
+	if !strings.Contains(strings.Join(strings.Fields(stdout), " "), "1 #13 grouped npm-and-yarn npm and yarn group unknown") {
 		t.Fatalf("plan output missing included grouped summary PR: %q", stdout)
 	}
 	if strings.Contains(stdout, "Excluded by filters") {
@@ -308,7 +322,7 @@ func TestPlanCommandExcludesMajorUpdatesByDefault(t *testing.T) {
 	if !strings.Contains(stdout, "Planned order for 1 Dependabot pull request(s)") {
 		t.Fatalf("plan output missing filtered plan header: %q", stdout)
 	}
-	if !strings.Contains(stdout, "1. #1 [ci] Bump actions/cache from 4.2.0 to 4.2.1") {
+	if !strings.Contains(strings.Join(strings.Fields(stdout), " "), "1 #1 ci github-actions actions/cache patch") {
 		t.Fatalf("plan output missing included PR: %q", stdout)
 	}
 	if !strings.Contains(stdout, "Excluded by filters (1):") {
@@ -354,11 +368,8 @@ func TestPlanCommandChangeKindAllIncludesAllPRs(t *testing.T) {
 	if !strings.Contains(stdout, "Planned order for 2 Dependabot pull request(s)") {
 		t.Fatalf("plan output missing full plan header: %q", stdout)
 	}
-	if !strings.Contains(stdout, "2. #9 [major] Bump the npm_and_yarn group with 2 updates") {
+	if !strings.Contains(strings.Join(strings.Fields(stdout), " "), "2 #9 major npm-and-yarn npm and yarn group major") {
 		t.Fatalf("plan output missing included grouped major PR: %q", stdout)
-	}
-	if !strings.Contains(stdout, "signals: ecosystem=npm-and-yarn change=major grouped=yes dev-tooling=no infra-sensitive=no") {
-		t.Fatalf("plan output should report change=major for a grouped PR with a major bump in its body, consistent with the [major] bucket it lands in: %q", stdout)
 	}
 	if strings.Contains(stdout, "Excluded by filters") {
 		t.Fatalf("plan output should not render excluded section with --change-kind=all: %q", stdout)
@@ -393,6 +404,19 @@ func TestPlanCommandAllMajorShowsZeroPlanAndExcludedSection(t *testing.T) {
 	}
 	if strings.Contains(stdout, noOpenDependabotPRsMessage) {
 		t.Fatalf("plan output incorrectly reported no PRs: %q", stdout)
+	}
+}
+
+func TestPlanCommandRejectsDetailsWithOutput(t *testing.T) {
+	t.Parallel()
+
+	lister := &fakeLister{}
+	_, err := executeTestCommand(t, lister, "plan", "--details", "--output", "-")
+	if err == nil || !strings.Contains(err.Error(), "details output") {
+		t.Fatalf("error = %v, want mutually exclusive flag error", err)
+	}
+	if len(lister.limits) != 0 {
+		t.Fatal("conflicting output flags should be rejected before discovery")
 	}
 }
 

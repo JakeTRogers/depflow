@@ -1,6 +1,7 @@
 package dependabot
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -89,6 +90,90 @@ func TestNormalizeClassifiesDeveloperTooling(t *testing.T) {
 	wantKeywords := []string{"golangci-lint"}
 	if !reflect.DeepEqual(pr.Classification.DevToolingKeywords, wantKeywords) {
 		t.Fatalf("DevToolingKeywords = %#v, want %#v", pr.Classification.DevToolingKeywords, wantKeywords)
+	}
+}
+
+func TestClassifyMonorepoUpdatesIgnoreProjectPaths(t *testing.T) {
+	t.Parallel()
+
+	title := "Bump lodash from 4.17.20 to 4.17.21"
+	baseline := classify(title, "", "dependabot/npm_and_yarn/lodash-4.17.21", []string{"dependencies"})
+	projects := make([]string, 0, 15)
+	for index := 1; index <= 13; index++ {
+		projects = append(projects, fmt.Sprintf("service%02d", index))
+	}
+	projects = append(projects, "docker-api", "terraform-api")
+	for _, project := range projects {
+		t.Run(project, func(t *testing.T) {
+			t.Parallel()
+
+			headRef := "dependabot/npm_and_yarn/services/" + project + "/lodash-4.17.21"
+			got := classify(title, "", headRef, []string{"dependencies"})
+			if !reflect.DeepEqual(got, baseline) {
+				t.Fatalf("classification = %+v, want shared baseline %+v", got, baseline)
+			}
+			if got.ChangeKind != ChangePatch || got.InfrastructureSensitive || got.DeveloperTooling {
+				t.Fatalf("expected a plain patch update, got %+v", got)
+			}
+		})
+	}
+}
+
+func TestClassifyRiskUsesDependencyIdentity(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		title   string
+		headRef string
+		labels  []string
+		infra   bool
+		tooling bool
+	}{
+		{
+			name:   "incidental title and labels",
+			title:  "build(docker): bump lodash from 4.17.20 to 4.17.21 in /services/terraform",
+			labels: []string{"aws", "eslint"},
+		},
+		{
+			name:    "branch fallback is not package identity",
+			title:   "Update dependency metadata",
+			headRef: "dependabot/npm_and_yarn/services/docker-eslint/lodash-4.17.21",
+		},
+		{
+			name:  "group name is not package identity",
+			title: "Bump the docker-eslint group with 2 updates",
+		},
+		{
+			name:  "group lead excludes group name",
+			title: "Bump lodash from 4.17.20 to 4.17.21 in the docker-eslint group",
+		},
+		{
+			name:    "genuine infrastructure dependency",
+			title:   "Bump docker/login-action from 3.0.0 to 3.0.1",
+			headRef: "dependabot/github_actions/docker/login-action-3.0.1",
+			infra:   true,
+		},
+		{
+			name:    "genuine tooling dependency",
+			title:   "Bump ESLint from 9.0.0 to 9.0.1",
+			tooling: true,
+		},
+		{
+			name:  "genuine grouped lead dependency",
+			title: "Bump docker/login-action in the ci group",
+			infra: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := classify(test.title, "", test.headRef, test.labels)
+			if got.InfrastructureSensitive != test.infra || got.DeveloperTooling != test.tooling {
+				t.Fatalf("classification = %+v, want infra=%t tooling=%t", got, test.infra, test.tooling)
+			}
+		})
 	}
 }
 

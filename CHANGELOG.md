@@ -1,3 +1,9 @@
+## v2.2.1 (2026-09-29)
+
+### Fix
+
+- prevent path-based dependency misclassification
+
 ## v2.2.0 (2026-09-29)
 
 ### Feat
