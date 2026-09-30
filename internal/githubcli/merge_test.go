@@ -14,7 +14,7 @@ func TestMergePullRequest(t *testing.T) {
 	executor := &stubExecutor{}
 	client := newClient(executor)
 
-	err := client.MergePullRequest(context.Background(), "", 42, false)
+	err := client.MergePullRequest(context.Background(), "", 42, false, "merge")
 	if err != nil {
 		t.Fatalf("MergePullRequest() error = %v", err)
 	}
@@ -40,7 +40,7 @@ func TestMergePullRequestWithRepo(t *testing.T) {
 	executor := &stubExecutor{}
 	client := newClient(executor)
 
-	err := client.MergePullRequest(context.Background(), "owner/repo", 42, false)
+	err := client.MergePullRequest(context.Background(), "owner/repo", 42, false, "merge")
 	if err != nil {
 		t.Fatalf("MergePullRequest() error = %v", err)
 	}
@@ -68,7 +68,7 @@ func TestMergePullRequestWithAdminAndRepo(t *testing.T) {
 	executor := &stubExecutor{}
 	client := newClient(executor)
 
-	err := client.MergePullRequest(context.Background(), "owner/repo", 42, true)
+	err := client.MergePullRequest(context.Background(), "owner/repo", 42, true, "merge")
 	if err != nil {
 		t.Fatalf("MergePullRequest() error = %v", err)
 	}
@@ -96,7 +96,7 @@ func TestMergePullRequestWrapsErrors(t *testing.T) {
 
 	client := newClient(&stubExecutor{err: errors.New("boom")})
 
-	err := client.MergePullRequest(context.Background(), "", 42, false)
+	err := client.MergePullRequest(context.Background(), "", 42, false, "merge")
 	if err == nil {
 		t.Fatal("MergePullRequest() error = nil, want non-nil")
 	}

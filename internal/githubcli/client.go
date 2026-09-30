@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 const maxCommandErrorOutput = 512
@@ -73,7 +74,9 @@ type Client interface {
 	ListOpenPullRequests(ctx context.Context, repo string, limit int) ([]PullRequest, error)
 	ViewPullRequest(ctx context.Context, repo string, number int) (PRDetail, error)
 	ApprovePullRequest(ctx context.Context, repo string, number int) error
-	MergePullRequest(ctx context.Context, repo string, number int, admin bool) error
+	MergePullRequest(ctx context.Context, repo string, number int, admin bool, method string) error
+	ReadMergeCapabilities(ctx context.Context, repo string) (MergeCapabilities, error)
+	CheckMergeAllowed(ctx context.Context, repo string, number int, method string) error
 	CommentOnPR(ctx context.Context, repo string, number int, body string) error
 	ListWorkflowRuns(ctx context.Context, repo string, branch string) ([]WorkflowRun, error)
 	CompareBranches(ctx context.Context, repo string, base string, head string) (BranchComparison, error)
@@ -90,6 +93,25 @@ func NewClient() (Client, error) {
 	return newClient(exec), nil
 }
 
+// NewLazyClient defers locating gh until a GitHub operation is requested.
+func NewLazyClient() Client {
+	return newClient(&lazyExecutor{})
+}
+
+type lazyExecutor struct {
+	once sync.Once
+	exec ghExecutor
+	err  error
+}
+
+func (lazy *lazyExecutor) Run(ctx context.Context, args ...string) ([]byte, error) {
+	lazy.once.Do(func() { lazy.exec, lazy.err = newGHExecutor() })
+	if lazy.err != nil {
+		return nil, lazy.err
+	}
+	return lazy.exec.Run(ctx, args...)
+}
+
 func newClient(exec executor) *client {
 	return &client{exec: exec}
 }
@@ -97,18 +119,14 @@ func newClient(exec executor) *client {
 // ResolveRepo returns the current GitHub repository inferred by the gh CLI.
 func (c *client) ResolveRepo(ctx context.Context) (string, error) {
 	var repo struct {
-		NameWithOwner string `json:"nameWithOwner"`
+		URL string `json:"url"`
 	}
 
-	if err := c.runJSON(ctx, &repo, "repo", "view", "--json", "nameWithOwner"); err != nil {
+	if err := c.runJSON(ctx, &repo, "repo", "view", "--json", "url"); err != nil {
 		return "", fmt.Errorf("resolving repository: %w", err)
 	}
 
-	if strings.TrimSpace(repo.NameWithOwner) == "" {
-		return "", errors.New("gh repo view returned an empty repository name")
-	}
-
-	return repo.NameWithOwner, nil
+	return repositoryFromURL(repo.URL)
 }
 
 func truncateOutput(output string, limit int) string {

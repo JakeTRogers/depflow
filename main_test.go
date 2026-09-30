@@ -9,6 +9,7 @@ import (
 )
 
 func TestMainRunsVersionCommand(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
 	oldArgs := os.Args
 	oldStdout := os.Stdout
 	oldStderr := os.Stderr

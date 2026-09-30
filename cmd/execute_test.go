@@ -27,6 +27,10 @@ func (f *fakeRepoResolver) ResolveRepo(_ context.Context) (string, error) {
 }
 
 type fakeExecuteOperator struct {
+	mergedMethods  []string
+	capabilities   *githubcli.MergeCapabilities
+	capabilityErr  error
+	policyErr      error
 	viewedRepos    []string
 	comparedRepos  []string
 	approvedRepos  []string
@@ -59,10 +63,22 @@ func (f *fakeExecuteOperator) ViewPullRequest(_ context.Context, repo string, nu
 	}, nil
 }
 
-func (f *fakeExecuteOperator) MergePullRequest(_ context.Context, repo string, _ int, admin bool) error {
+func (f *fakeExecuteOperator) MergePullRequest(_ context.Context, repo string, _ int, admin bool, method string) error {
+	f.mergedMethods = append(f.mergedMethods, method)
 	f.mergedRepos = append(f.mergedRepos, repo)
 	f.mergedAdmins = append(f.mergedAdmins, admin)
 	return nil
+}
+
+func (f *fakeExecuteOperator) ReadMergeCapabilities(_ context.Context, repo string) (githubcli.MergeCapabilities, error) {
+	if f.capabilities != nil {
+		return *f.capabilities, f.capabilityErr
+	}
+	return githubcli.MergeCapabilities{Repo: repo, Methods: []string{"merge", "squash", "rebase"}}, f.capabilityErr
+}
+
+func (f *fakeExecuteOperator) CheckMergeAllowed(context.Context, string, int, string) error {
+	return f.policyErr
 }
 
 func (f *fakeExecuteOperator) ApprovePullRequest(_ context.Context, repo string, _ int) error {
@@ -300,8 +316,8 @@ func TestExecuteCommandDryRunPrintsPlanWithoutResolvingRepoOrExecuting(t *testin
 	if strings.Contains(stdout.String(), "Excluded by filters") {
 		t.Fatalf("stdout = %q, should not render exclusion notice when no major PRs exist", stdout.String())
 	}
-	if resolver.calls != 0 {
-		t.Fatalf("ResolveRepo() calls = %d, want 0 in dry-run mode", resolver.calls)
+	if resolver.calls != 1 {
+		t.Fatalf("ResolveRepo() calls = %d, want 1 for dry-run policy lookup", resolver.calls)
 	}
 	if len(operator.viewedRepos) != 0 || len(operator.comparedRepos) != 0 || len(operator.approvedRepos) != 0 || len(operator.mergedRepos) != 0 {
 		t.Fatalf("executor should not run in dry-run mode: viewed=%v compared=%v approved=%v merged=%v", operator.viewedRepos, operator.comparedRepos, operator.approvedRepos, operator.mergedRepos)

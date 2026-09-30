@@ -19,6 +19,7 @@ type prLister interface {
 
 type prOperator interface {
 	executor.Operator
+	ReadMergeCapabilities(ctx context.Context, repo string) (githubcli.MergeCapabilities, error)
 }
 
 type repoResolver interface {
@@ -33,6 +34,7 @@ type commandDeps struct {
 }
 
 type commandOptions struct {
+	configPath          string
 	repo                string
 	limit               int
 	verbosity           int
@@ -48,10 +50,7 @@ type commandOptions struct {
 const defaultPullRequestLimit = 100
 
 func defaultDeps() (commandDeps, error) {
-	client, err := githubcli.NewClient()
-	if err != nil {
-		return commandDeps{}, fmt.Errorf("creating GitHub CLI client: %w", err)
-	}
+	client := githubcli.NewLazyClient()
 
 	return commandDeps{
 		lister:   client,
@@ -72,6 +71,7 @@ func newRootCommand(deps commandDeps) *cobra.Command {
 	}
 
 	cmd.PersistentFlags().StringVar(&opts.repo, "repo", "", "GitHub repository in [HOST/]OWNER/REPO format")
+	cmd.PersistentFlags().StringVar(&opts.configPath, "config", "", "use this YAML preferences file instead of the user default")
 	cmd.PersistentFlags().IntVar(&opts.limit, "limit", defaultPullRequestLimit, "maximum number of Dependabot pull requests to return after filtering")
 	cmd.PersistentFlags().CountVarP(&opts.verbosity, "verbose", "v", "increase log verbosity (-v info, -vv debug, -vvv trace)")
 	cmd.PersistentFlags().StringSliceVar(&opts.ecosystems, "ecosystem", nil, "only include PRs from these ecosystems (repeatable or comma-separated)")
@@ -86,6 +86,7 @@ func newRootCommand(deps commandDeps) *cobra.Command {
 	cmd.AddCommand(newPlanCommand(deps, opts))
 	cmd.AddCommand(newExecuteCommand(deps, opts))
 	cmd.AddCommand(newVersionCommand())
+	cmd.AddCommand(newConfigCommand(deps, opts))
 
 	return cmd
 }

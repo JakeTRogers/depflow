@@ -44,7 +44,7 @@ Processes Dependabot PRs in planned order with a live progress display. By defau
 - Waits for CI checks to pass by polling the status check rollup
 - Re-checks mergeability and branch state before merge
 - Submits an approval review immediately before merge
-- Merges the PR using a merge commit strategy and deletes the head branch
+- Merges the PR using the selected method and deletes the head branch
 - Waits for post-merge CI for the merged commit on the base branch before proceeding to the next PR
 - Stops on first failure (no retry or skip mode) and exits non-zero if any PR fails to process
 
@@ -56,6 +56,7 @@ If the process receives `SIGINT` or `SIGTERM`, depflow cancels the active execut
 #### Execute Flags
 
 - `--dry-run` — show planned order without executing
+- `--merge-method merge|squash|rebase` — override the preferred merge method for this run; see [Merge preferences](#merge-preferences)
 - `--edit` — open the plan in your editor before executing; see [Editing the plan](#editing-the-plan)
 - `--plan FILE` — execute a plan file written by `depflow plan -o` (`-` reads stdin); cannot be combined with `--edit`, `--limit`, `--change-kind`, `--include-drafts`, or the classification filters
 - `--change-kind` — include only these change kinds in execution (default: `patch,minor,unknown`)
@@ -69,6 +70,81 @@ If the process receives `SIGINT` or `SIGTERM`, depflow cancels the active execut
 - `--show-timing` — show elapsed wait time on the progress line and per-PR duration in the execution summary
 
 All execute duration flags must be greater than zero. `--poll-interval` must be at least 5 seconds. `--check-timeout` and `--post-merge-timeout` must be greater than `--poll-interval`.
+
+### Merge preferences
+
+Choose one of GitHub CLI's three merge methods:
+
+| Value | GitHub action | GitHub CLI flag |
+| --- | --- | --- |
+| `merge` | Create a merge commit | `--merge` |
+| `squash` | Squash and merge | `--squash` |
+| `rebase` | Rebase and merge | `--rebase` |
+
+This choice is independent of the `@dependabot rebase` request used to bring an outdated PR branch up to date. The default remains `merge` when no preference is configured. Preferences apply to normal execution, `--edit`, and `--plan`; saved plans do not store a merge method.
+
+```bash
+depflow config set merge-method squash
+depflow config set merge-method rebase --repo github.com/acme/service
+depflow config set merge-method squash --local
+depflow execute --repo acme/service --merge-method merge
+```
+
+Precedence, highest first:
+
+1. Explicit `execute --merge-method`
+2. `DEPFLOW_MERGE_METHOD` environment variable
+3. Saved repository preference
+4. Saved global preference
+5. Built-in `merge` default
+
+An explicitly empty or invalid value is an error, not a request to inherit. Unset the environment variable to restore inheritance. Configuration and environment values are validated before discovery; explicit valid run flags override environment values. Invalid saved configuration must be repaired rather than silently ignored.
+
+For a nonempty plan, execution reports the effective method and its source on stderr and queries GitHub for repository-enabled methods. It validates every selected PR's repository method and merge queue policy before making any changes, and refreshes policy before updating each PR and immediately before approval. If the effective method is disabled, depflow stops with the allowed alternatives and a rerun hint. It never silently changes methods, even when only one is allowed. Keep the original filters or `--plan` argument when applying the suggested `--merge-method` override.
+
+Capability lookup failures stop execution before mutations. Dry runs still print the plan and method: known policy conflicts fail, while unavailable policy data produces an explicit `unverified` warning. If repository resolution is unavailable, repository-specific preferences may also be unresolved. Dry runs never modify PRs.
+
+The repository-enabled list is not a guarantee of mergeability: branch rulesets, linear-history requirements, permissions, conflicts, and checks can still block a merge. GitHub's decision at merge time is authoritative; policy changes can stop a partially completed run. Successfully processed PRs are not rolled back.
+
+Merge-queue-enabled target branches are explicitly unsupported, including with `--admin`. Queues control their own merge method, and `gh` does not support this tool's `--delete-branch` flow on those branches. Depflow never adds an admin bypass to solve a preference conflict. The GitHub host must support the `isMergeQueueEnabled` GraphQL field; unsupported or unavailable policy metadata fails closed during execution.
+
+### config
+
+Configuration uses Viper and YAML, with a command interface similar to getRelease:
+
+```bash
+depflow config show                           # effective global preferences, YAML
+depflow config show --repo acme/service       # effective preferences for a repository
+depflow config show --local --show-origin     # values, sources, scope, and file path
+depflow config show --format json             # machine-readable effective values
+depflow config get merge-method
+depflow config set merge-method squash
+depflow config reset merge-method --local     # remove repository override; inherit again
+depflow config reset --yes                    # reset global overrides only
+depflow config reset --repo acme/service --yes # reset this repository's overrides only
+depflow config edit                           # edit the complete file in $VISUAL/$EDITOR
+depflow config path
+```
+
+No scope flag means global settings; `--global` makes that explicit. `--repo [HOST/]OWNER/REPO` selects a repository without a network lookup. An unqualified owner/repo uses `GH_HOST` if set, otherwise `github.com`. `--local` asks `gh` for the current repository. These scope selectors are mutually exclusive. Global configuration commands and explicit `--repo` configuration work without `gh` installed or authenticated. They validate preference values but do not check whether a repository currently allows them.
+
+All scopes live in one user-owned file, never a file in the checkout. Repository keys are lowercase, host-qualified identities so GitHub.com and Enterprise repositories cannot share overrides accidentally. Execution uses the host from the repository URL returned by `gh`.
+
+```yaml
+version: 1
+merge-method: squash
+repositories:
+  github.com/acme/service:
+    merge-method: rebase
+  git.example.com/acme/service:
+    merge-method: merge
+```
+
+The default location is `depflow/config.yaml` under Go's platform-specific user configuration directory: `$XDG_CONFIG_HOME` or `$HOME/.config` on Linux, `$HOME/Library/Application Support` on macOS, and `%AppData%` on Windows. `--config PATH` selects a different YAML file instead of layering it over the default. A missing default file uses built-in defaults; an explicitly selected missing file is an error for reads and execution. `config set`, `reset`, and `edit` can create it.
+
+Only saved overrides are written. Environment values, run flags, and inherited defaults are never persisted by `config set`. Resetting removes overrides rather than writing today's default, and does not remove other scopes. Resetting an entire scope requires `--yes`; there are no surprise confirmation prompts in scripts. `config edit` always edits the whole file, so omit scope selectors. It validates a temporary copy before replacing the original and refuses to overwrite changes made while the editor was open. Invalid edits leave the original untouched, and malformed existing files can be repaired with `config edit`.
+
+Writes use a temporary file and a sibling `.lock` file to prevent cooperating writers from losing updates. If a process crashes during a write, remove its stale lock only after confirming no configuration writer is running. New configuration files use owner-only permissions where supported. Unknown keys, unsupported schema versions, and unreadable files are errors. Only `merge-method` is currently configurable; other execution flags remain per-run options.
 
 ### Editing the plan
 
@@ -115,6 +191,7 @@ depflow 0.1.0 (linux/amd64)
 
 ## Global Flags
 
+- `--config PATH` — use an explicit YAML preferences file instead of the user default
 - `--repo [HOST/]OWNER/REPO` — target an explicit GitHub repository; if omitted, `gh` attempts to infer the current repository and `execute` resolves that repo before mutating operations
 - `--limit N` — maximum number of eligible Dependabot pull requests to return after classification filtering (default: 100). Discovery expands the underlying open-PR query as needed, capped at 1000 pull requests, so PRs filtered out do not count against the limit.
 - `-v, --verbose` — increase execute log verbosity (`-v` for info, `-vv` for debug, `-vvv` for trace)
@@ -165,6 +242,8 @@ depflow version
 
 depflow uses Cobra's built-in `completion` command. Bash, Zsh, and Fish are supported.
 
+`execute --merge-method <TAB>` suggests methods enabled for the selected `--repo` or the repository inferred by `gh`, with descriptions where the shell supports them. The lookup has a 500 ms deadline. Missing authentication, an unresolved repository, offline operation, or a timeout silently falls back to all three methods; a verified empty allowlist offers none. Only arguments before the cursor are available to completion, so place `--repo` before `--merge-method` when completing for another repository. Execution always validates independently. Configuration keys and `config set merge-method <TAB>` complete without network access; global preferences are not restricted by the current repository.
+
 ```bash
 # Bash
 source <(depflow completion bash)
@@ -184,6 +263,7 @@ depflow completion fish | source
 - `internal/planfile/` — Renders and parses editable plan files (`pick`/`skip` lines) used by `plan -o`, `execute --edit`, and `execute --plan`
 - `internal/executor/` — Sequential PR processing loop with Operator interface (dependency injection), approval before merge, and polling helpers for CI checks, branch updates, and post-merge CI
 - `internal/githubcli/` — Thin `gh` CLI wrapper: list PRs, view PR details, approve, merge, comment, compare branches, list workflow runs
+- `internal/config/` — Viper-backed preferences with global and host-qualified repository scopes, validation, inheritance, and guarded YAML persistence
 - `internal/progress/` — mpb-based live progress tracker with verbosity-controlled slog logger
 - `internal/terminal/` — Strips terminal control bytes from untrusted GitHub-sourced strings before they reach the terminal
 - `main.go` — Entry point

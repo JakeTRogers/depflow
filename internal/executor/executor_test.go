@@ -28,6 +28,8 @@ type commentCall struct {
 }
 
 type fakeOperator struct {
+	mergeMethods   []string
+	policyErrors   []error
 	mu             sync.Mutex
 	viewResults    map[int][]githubcli.PRDetail
 	viewErrors     map[int]error
@@ -65,17 +67,29 @@ func (f *fakeOperator) ViewPullRequest(_ context.Context, _ string, number int) 
 	return result, nil
 }
 
-func (f *fakeOperator) MergePullRequest(_ context.Context, _ string, number int, admin bool) error {
+func (f *fakeOperator) MergePullRequest(_ context.Context, _ string, number int, admin bool, method string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
 	f.callSequence = append(f.callSequence, fmt.Sprintf("merge:%d", number))
 	f.mergeCalls = append(f.mergeCalls, number)
 	f.mergeAdmin = append(f.mergeAdmin, admin)
+	f.mergeMethods = append(f.mergeMethods, method)
 	if err, ok := f.mergeErrors[number]; ok {
 		return err
 	}
 	return nil
+}
+
+func (f *fakeOperator) CheckMergeAllowed(context.Context, string, int, string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.policyErrors) == 0 {
+		return nil
+	}
+	err := f.policyErrors[0]
+	f.policyErrors = f.policyErrors[1:]
+	return err
 }
 
 func (f *fakeOperator) ApprovePullRequest(_ context.Context, _ string, number int) error {
@@ -145,6 +159,44 @@ func testConfig() Config {
 
 func testLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
+}
+
+func TestMergePolicyChanges(t *testing.T) {
+	t.Parallel()
+	for _, afterWait := range []bool{false, true} {
+		detail := githubcli.PRDetail{Number: 1, State: "OPEN", Mergeable: "MERGEABLE", HeadRefName: "branch", BaseRefName: "main", StatusCheckRollup: []githubcli.StatusCheck{{Name: "ci", Conclusion: "success"}}}
+		policyErr := errors.New("method disabled")
+		policyErrors := []error{policyErr}
+		if afterWait {
+			policyErrors = []error{nil, policyErr}
+		}
+		op := &fakeOperator{viewResults: map[int][]githubcli.PRDetail{1: {detail, detail, detail}}, compareResults: []githubcli.BranchComparison{{}, {}}, policyErrors: policyErrors}
+		_, err := Run(context.Background(), op, newTestPlan(dependabot.PR{Number: 1}), "owner/repo", testConfig(), nil, nil)
+		if !errors.Is(err, policyErr) || len(op.approveCalls) != 0 || len(op.mergeCalls) != 0 || len(op.commentCalls) != 0 {
+			t.Fatalf("afterWait=%v: %v, %+v", afterWait, err, op)
+		}
+	}
+}
+
+func TestMergeMethodsPostMergeCI(t *testing.T) {
+	t.Parallel()
+	for _, method := range []string{"merge", "squash", "rebase"} {
+		t.Run(method, func(t *testing.T) {
+			t.Parallel()
+			detail := githubcli.PRDetail{State: "OPEN", Mergeable: "MERGEABLE", HeadRefName: "branch", BaseRefName: "main", StatusCheckRollup: []githubcli.StatusCheck{{Name: "ci", Conclusion: "success"}}}
+			sha := method + "-result-sha"
+			op := &fakeOperator{viewResults: map[int][]githubcli.PRDetail{
+				1: {detail, detail, detail, {State: "MERGED", MergeCommit: githubcli.MergeCommit{OID: sha}}},
+				2: {detail, detail, detail},
+			}, compareResults: []githubcli.BranchComparison{{}, {}, {}, {}}, runResults: map[string][][]githubcli.WorkflowRun{"main": {{{Name: "CI", Status: "completed", Conclusion: "failure", HeadSHA: "old-pr-head"}, {Name: "CI", Status: "completed", Conclusion: "success", HeadSHA: sha}}}}}
+			cfg := testConfig()
+			cfg.MergeMethod = method
+			result, err := Run(context.Background(), op, newTestPlan(dependabot.PR{Number: 1}, dependabot.PR{Number: 2}), "owner/repo", cfg, nil, nil)
+			if err != nil || len(result.Merged()) != 2 || strings.Join(op.mergeMethods, ",") != method+","+method {
+				t.Fatalf("%+v, %v, methods=%v", result, err, op.mergeMethods)
+			}
+		})
+	}
 }
 
 func TestRun(t *testing.T) {
