@@ -29,11 +29,21 @@ PRs excluded by any filter are listed with their specific reason under an `Exclu
 
 Lists open Dependabot pull requests with metadata including classification signals: ecosystem, change kind, grouping, developer tooling, and infrastructure sensitivity.
 
+Developer-tooling and infrastructure-sensitive hints use keywords from the dependency name parsed from the PR title, or the lead dependency of a grouped update. Project paths, labels, group names, and other title text do not set these hints. When the name can only be inferred from a branch, it is still displayed but does not contribute risk hints. These are keyword heuristics, not a complete assessment of dependency risk, and apply to `scan`, `plan`, and `execute` alike.
+
 ### plan
 
 Shows deterministic classification and the preferred processing order. By default, `plan` excludes major version updates and drafts from the planned queue and lists them separately under `Excluded by filters` along with the reason each was excluded. Grouped summary PRs are also treated as major when their PR body contains a major version bump. Included PRs are sorted into buckets — ci, developer-tooling, patch, minor, grouped, unknown, infra-sensitive, major — so that lower-risk updates are processed first.
 
-- `-o, --output FILE` — write an [editable plan file](#editing-the-plan) instead of the listing (`-` writes it to stdout)
+The default listing is a compact table with execution order, PR number, bucket, ecosystem, dependency, and change kind. Every PR has its own row in processing order. Missing values appear as `unknown`; when no dependency name is available, the title is shown instead. Long identifiers are preserved rather than truncated.
+
+- `--details`: show full titles, classification signals, reasons, and URLs instead of the compact table
+- `-o, --output FILE` — write an [editable plan file](#editing-the-plan) instead of the listing (`-` writes it to stdout); cannot be combined with `--details`
+
+```bash
+depflow plan
+depflow plan --details
+```
 
 ### execute
 

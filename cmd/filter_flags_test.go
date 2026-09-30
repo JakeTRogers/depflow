@@ -156,7 +156,7 @@ func TestPlanCommandEcosystemAllowList(t *testing.T) {
 	if !strings.Contains(stdout, "Planned order for 1 Dependabot pull request(s)") {
 		t.Fatalf("plan output should only include the github-actions PR: %q", stdout)
 	}
-	if !strings.Contains(stdout, "#2 [ci] Bump actions/cache") {
+	if !strings.Contains(strings.Join(strings.Fields(stdout), " "), "#2 ci github-actions actions/cache patch") {
 		t.Fatalf("plan output missing allow-listed ecosystem PR: %q", stdout)
 	}
 	if !strings.Contains(stdout, `ecosystem "npm-and-yarn" not in --ecosystem allow-list`) {
@@ -271,7 +271,7 @@ func TestPlanCommandLimitAppliesAfterFilteringNotBeforeIt(t *testing.T) {
 	if !strings.Contains(stdout, "Planned order for 1 Dependabot pull request(s)") {
 		t.Fatalf("plan output should still find the eligible PR beyond the two drafts: %q", stdout)
 	}
-	if !strings.Contains(stdout, "#3 [patch] Bump lodash from 4.17.20 to 4.17.21") {
+	if !strings.Contains(strings.Join(strings.Fields(stdout), " "), "#3 patch npm-and-yarn lodash patch") {
 		t.Fatalf("plan output missing the eligible PR #3, --limit should apply after filtering: %q", stdout)
 	}
 }

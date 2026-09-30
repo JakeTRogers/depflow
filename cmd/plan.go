@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"text/tabwriter"
 	"time"
 
 	"github.com/JakeTRogers/depflow/internal/dependabot"
@@ -17,6 +18,7 @@ import (
 type planOptions struct {
 	changeKind    []string
 	includeDrafts bool
+	details       bool
 	output        string
 }
 
@@ -56,15 +58,8 @@ func newPlanCommand(deps commandDeps, opts *commandOptions) *cobra.Command {
 				return fmt.Errorf("writing plan header: %w", err)
 			}
 
-			for index, item := range plan.Items {
-				if err := writePlannedPR(cmd.OutOrStdout(), index+1, item); err != nil {
-					return err
-				}
-				if index+1 < len(plan.Items) {
-					if _, err := fmt.Fprintln(cmd.OutOrStdout()); err != nil {
-						return fmt.Errorf("writing plan separator: %w", err)
-					}
-				}
+			if err := writePlanItems(cmd.OutOrStdout(), plan, planOpts.details); err != nil {
+				return err
 			}
 
 			if len(excluded) > 0 {
@@ -87,9 +82,62 @@ func newPlanCommand(deps commandDeps, opts *commandOptions) *cobra.Command {
 		panic(err)
 	}
 	cmd.Flags().BoolVar(&planOpts.includeDrafts, "include-drafts", false, "include draft Dependabot PRs in planning")
+	cmd.Flags().BoolVar(&planOpts.details, "details", false, "show full titles, classification signals, reasons, and URLs instead of the compact table")
 	cmd.Flags().StringVarP(&planOpts.output, "output", "o", "", "write an editable plan file for `depflow execute --plan` (- for stdout)")
+	cmd.MarkFlagsMutuallyExclusive("details", "output")
 
 	return cmd
+}
+
+func writePlanItems(writer io.Writer, plan planner.Plan, details bool) error {
+	if !details {
+		return writeCompactPlan(writer, plan)
+	}
+	for index, item := range plan.Items {
+		if err := writePlannedPR(writer, index+1, item); err != nil {
+			return err
+		}
+		if index+1 < len(plan.Items) {
+			if _, err := fmt.Fprintln(writer); err != nil {
+				return fmt.Errorf("writing plan separator: %w", err)
+			}
+		}
+	}
+	return nil
+}
+
+func writeCompactPlan(writer io.Writer, plan planner.Plan) error {
+	if len(plan.Items) == 0 {
+		return nil
+	}
+	var builder strings.Builder
+	builder.WriteString("ORDER\tPR\tBUCKET\tECOSYSTEM\tDEPENDENCY\tCHANGE\n")
+	for index, item := range plan.Items {
+		classification := item.PR.Classification
+		dependency := classification.DependencyName
+		if strings.TrimSpace(dependency) == "" {
+			dependency = item.PR.Title
+		}
+		fmt.Fprintf(&builder, "%d\t#%d\t%s\t%s\t%s\t%s\n", index+1, item.PR.Number,
+			planCell(string(item.Bucket)), planCell(classification.Ecosystem),
+			planCell(dependency), planCell(string(classification.EffectiveChangeKind())))
+	}
+	table := tabwriter.NewWriter(writer, 0, 4, 2, ' ', 0)
+	if _, err := io.WriteString(table, builder.String()); err != nil {
+		return fmt.Errorf("writing compact plan: %w", err)
+	}
+	if err := table.Flush(); err != nil {
+		return fmt.Errorf("writing compact plan: %w", err)
+	}
+	return nil
+}
+
+func planCell(value string) string {
+	value = strings.Join(strings.Fields(sanitize(value)), " ")
+	if value == "" {
+		return "unknown"
+	}
+	return value
 }
 
 func writePlannedPR(writer io.Writer, index int, item planner.PlannedPR) error {

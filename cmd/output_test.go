@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -64,6 +65,86 @@ func TestWriteScannedPRSanitizesGitHubFields(t *testing.T) {
 	}
 	if !strings.Contains(got, "url: https://example.test/pr/42]8;;evil") {
 		t.Fatalf("scan output = %q, want sanitized url", got)
+	}
+}
+
+func TestWriteCompactPlan(t *testing.T) {
+	t.Parallel()
+
+	longDependency := strings.Repeat("long-dependency-", 20)
+	tests := []struct {
+		name string
+		plan planner.Plan
+		want string
+	}{
+		{name: "empty"},
+		{
+			name: "order and effective grouped change",
+			plan: planner.Plan{Items: []planner.PlannedPR{
+				{PR: dependabot.PR{Number: 7, Classification: dependabot.Classification{
+					Ecosystem: "npm-and-yarn", DependencyName: "frontend group", ContainsMajorUpdate: true,
+				}}, Bucket: planner.BucketMajor},
+				{PR: dependabot.PR{Number: 3, Classification: dependabot.Classification{
+					Ecosystem: "go-modules", DependencyName: "github.com/pkg/errors", ChangeKind: dependabot.ChangePatch,
+				}}, Bucket: planner.BucketPatch},
+			}},
+			want: "ORDER PR BUCKET ECOSYSTEM DEPENDENCY CHANGE\n1 #7 major npm-and-yarn frontend group major\n2 #3 patch go-modules github.com/pkg/errors patch\n",
+		},
+		{
+			name: "sanitize whitespace and preserve long identifiers",
+			plan: planner.Plan{Items: []planner.PlannedPR{
+				{PR: dependabot.PR{Number: 2, Classification: dependabot.Classification{
+					Ecosystem: "npm-and-yarn\x07", DependencyName: longDependency + "\x1b\n\t\rname", ChangeKind: dependabot.ChangeMinor,
+				}}, Bucket: planner.BucketMinor},
+				{PR: dependabot.PR{Number: 1, Title: "Fallback\n\ttitle\r\x07"}, Bucket: planner.BucketUnknown},
+				{PR: dependabot.PR{Number: 4}, Bucket: planner.BucketUnknown},
+			}},
+			want: "ORDER PR BUCKET ECOSYSTEM DEPENDENCY CHANGE\n1 #2 minor npm-and-yarn " + longDependency + " name minor\n2 #1 unknown unknown Fallback title unknown\n3 #4 unknown unknown unknown unknown\n",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			var output bytes.Buffer
+			if err := writeCompactPlan(&output, test.plan); err != nil {
+				t.Fatal(err)
+			}
+			lines := strings.Split(output.String(), "\n")
+			for index, line := range lines {
+				lines[index] = strings.Join(strings.Fields(line), " ")
+			}
+			if got := strings.Join(lines, "\n"); got != test.want {
+				t.Fatalf("output = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestWritePlanItemsPropagatesWriteErrors(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name    string
+		details bool
+	}{
+		{name: "compact"},
+		{name: "details", details: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			reader, writer := io.Pipe()
+			t.Cleanup(func() { _ = writer.Close() })
+			want := errors.New("output unavailable")
+			if err := reader.CloseWithError(want); err != nil {
+				t.Fatal(err)
+			}
+			plan := planner.Plan{Items: []planner.PlannedPR{{PR: dependabot.PR{Number: 1}}}}
+			if err := writePlanItems(writer, plan, test.details); !errors.Is(err, want) {
+				t.Fatalf("error = %v, want %v", err, want)
+			}
+		})
 	}
 }
 
