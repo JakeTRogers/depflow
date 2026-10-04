@@ -231,3 +231,46 @@ func TestExecuteWritesNoResumePlanAfterSuccess(t *testing.T) {
 		t.Fatalf("successful run left resume output: entries=%v err=%v\n%s", entries, err, run.stdout)
 	}
 }
+
+func TestExecuteSkipFailedContinuesAndResumesFailedPRs(t *testing.T) {
+	t.Parallel()
+
+	open := func(number int, conclusion string) githubcli.PRDetail {
+		return githubcli.PRDetail{Number: number, State: "OPEN", Mergeable: "MERGEABLE", HeadRefName: "branch", BaseRefName: "main", StatusCheckRollup: []githubcli.StatusCheck{{Name: "ci", Conclusion: conclusion}}}
+	}
+	// planFileFixture plans #13, #10, #11: #13 fails CI and is set aside, #10 and #11 merge.
+	operator := &fakeExecuteOperator{
+		viewResults: []githubcli.PRDetail{
+			open(13, "success"), open(13, "failure"),
+			open(10, "success"), open(10, "success"), open(10, "success"), {Number: 10, State: "MERGED", MergeCommit: githubcli.MergeCommit{OID: "sha-10"}},
+			open(11, "success"), open(11, "success"), open(11, "success"),
+		},
+		runResults: map[string][][]githubcli.WorkflowRun{"main": {{{Name: "CI", Event: "push", Status: "completed", Conclusion: "success", HeadSHA: "sha-10"}}}},
+	}
+	dir := t.TempDir()
+	run := runWithDeps(t, commandDeps{lister: planFileFixture(), operator: operator, resumeDir: dir}, "",
+		"--repo", "owner/repo", "execute", "--skip-failed", "--post-merge-delay", "1ms")
+	if !errors.Is(run.err, executor.ErrExecutionFailed) || !strings.Contains(run.err.Error(), "1 PR(s) set aside after failing: #13") {
+		t.Fatalf("error = %v, want set-aside error", run.err)
+	}
+	if len(operator.mergedRepos) != 2 {
+		t.Fatalf("merges = %d, want 2", len(operator.mergedRepos))
+	}
+	hintPrefix := "To continue, run: depflow --repo=owner/repo --post-merge-delay=1ms --skip-failed execute --plan "
+	if runtime.GOOS == "windows" {
+		hintPrefix = "To continue, run in PowerShell: depflow --repo='owner/repo' --post-merge-delay='1ms' --skip-failed execute --plan "
+	}
+	for _, fragment := range []string{
+		"Merged: 2  Failed: #13\n",
+		"Resume plan for 1 PR(s) written to ",
+		"(#13 failed and is listed first; change it to skip to leave it out).\n",
+		hintPrefix,
+	} {
+		if !strings.Contains(run.stdout, fragment) {
+			t.Fatalf("stdout missing %q:\n%s", fragment, run.stdout)
+		}
+	}
+	if strings.Contains(run.stdout, "Not attempted") {
+		t.Fatalf("every PR was attempted:\n%s", run.stdout)
+	}
+}

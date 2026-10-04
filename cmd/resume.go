@@ -29,12 +29,14 @@ var resumeFlags = []string{
 	"post-merge-delay",
 	"post-merge-timeout",
 	"require-post-merge-ci",
+	"skip-failed",
 	"show-checks",
 	"show-timing",
 }
 
-// resumeItems returns the PRs a rerun should process, in plan order: the PR that stopped
-// execution, unless it had already merged, followed by every PR that was never attempted.
+// resumeItems returns the PRs a rerun should process, in plan order: every PR that failed without
+// merging (the one that stopped execution, or each one --skip-failed set aside) and every PR that
+// was never attempted.
 func resumeItems(plan planner.Plan, result *executor.Result) (resume []planner.PlannedPR, notAttempted []int) {
 	processed := make(map[int]executor.PRResult)
 	if result != nil {
@@ -68,9 +70,18 @@ func writeResumePlan(cmd *cobra.Command, deps commandDeps, resume []planner.Plan
 		return fmt.Errorf("saving resume plan %s: %w", file.Name(), err)
 	}
 
+	var retried []int
+	for _, failed := range result.FailedPRs() {
+		if !failed.Merged {
+			retried = append(retried, failed.Item.PR.Number)
+		}
+	}
 	note := ""
-	if failed := result.Failed(); failed != nil && !failed.Merged {
-		note = fmt.Sprintf(" (#%d failed and is listed first; change it to skip to leave it out)", failed.Item.PR.Number)
+	switch {
+	case len(retried) == 1 && retried[0] == resume[0].PR.Number:
+		note = fmt.Sprintf(" (#%d failed and is listed first; change it to skip to leave it out)", retried[0])
+	case len(retried) > 0:
+		note = fmt.Sprintf(" (failed PRs %s are included; change their lines to skip to leave them out)", formatPRNumbers(retried))
 	}
 	_, err = fmt.Fprintf(cmd.OutOrStdout(), "\nResume plan for %d PR(s) written to %s%s.\n%s\n",
 		len(resume), file.Name(), note, resumeHint(cmd, file.Name(), runtime.GOOS))
@@ -117,6 +128,14 @@ func shellQuote(value, goos string) string {
 		return value
 	}
 	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
+}
+
+func prResultNumbers(results []executor.PRResult) []int {
+	numbers := make([]int, 0, len(results))
+	for _, pr := range results {
+		numbers = append(numbers, pr.Item.PR.Number)
+	}
+	return numbers
 }
 
 func writeNotAttempted(w io.Writer, notAttempted []int) error {

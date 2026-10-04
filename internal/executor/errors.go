@@ -14,6 +14,8 @@ var (
 	ErrBranchUpdateTimeout = errors.New("branch update timeout exceeded")
 	// ErrHeadChanged indicates the PR head commit moved after its CI checks were verified.
 	ErrHeadChanged = errors.New("head commit changed after CI checks passed")
+	// ErrBranchBehind indicates the PR branch was still behind its base when it was about to merge.
+	ErrBranchBehind = errors.New("branch behind base")
 	// ErrMergeConflict indicates the PR cannot be merged because of conflicts.
 	ErrMergeConflict = errors.New("merge conflict detected")
 	// ErrPostMergeTimeout indicates waiting for post-merge CI exceeded the configured timeout.

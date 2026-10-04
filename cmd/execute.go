@@ -29,6 +29,7 @@ type executeOptions struct {
 	postMergeDelay   time.Duration
 	postMergeTimeout time.Duration
 	requirePostMerge bool
+	skipFailed       bool
 	showChecks       bool
 	showTiming       bool
 	edit             bool
@@ -156,6 +157,7 @@ func newExecuteCommand(deps commandDeps, opts *commandOptions) *cobra.Command {
 	cmd.Flags().DurationVar(&execOpts.postMergeDelay, "post-merge-delay", 10*time.Second, "delay before checking post-merge CI")
 	cmd.Flags().DurationVar(&execOpts.postMergeTimeout, "post-merge-timeout", 30*time.Minute, "maximum wait for post-merge CI")
 	cmd.Flags().BoolVar(&execOpts.requirePostMerge, "require-post-merge-ci", false, "fail if a merge commit starts no workflow runs instead of continuing with a warning")
+	cmd.Flags().BoolVar(&execOpts.skipFailed, "skip-failed", false, "set aside a PR whose checks fail or time out, or that conflicts or cannot be rebased, and continue with the rest")
 	cmd.Flags().BoolVar(&execOpts.showChecks, "show-checks", false, "show per-check pass/pending/fail detail while waiting")
 	cmd.Flags().BoolVar(&execOpts.showTiming, "show-timing", false, "show elapsed wait time and per-PR duration")
 
@@ -217,6 +219,7 @@ func runPlan(cmd *cobra.Command, deps commandDeps, opts *commandOptions, execOpt
 		RequirePostMergeCI: execOpts.requirePostMerge,
 		ShowChecks:         execOpts.showChecks,
 		ShowTiming:         execOpts.showTiming,
+		SkipFailed:         execOpts.skipFailed,
 	}
 
 	ui := progress.NewTracker(cmd.ErrOrStderr(), len(plan.Items))
@@ -356,12 +359,12 @@ func printResult(w io.Writer, result *executor.Result, notAttempted []int, showT
 	}
 
 	merged := result.Merged()
-	failed := result.Failed()
+	failed := result.FailedPRs()
 	if _, err := fmt.Fprintf(w, "\nMerged: %d", len(merged)); err != nil {
 		return fmt.Errorf("writing execution summary totals: %w", err)
 	}
-	if failed != nil {
-		if _, err := fmt.Fprintf(w, "  Failed: #%d", failed.Item.PR.Number); err != nil {
+	if len(failed) > 0 {
+		if _, err := fmt.Fprintf(w, "  Failed: %s", formatPRNumbers(prResultNumbers(failed))); err != nil {
 			return fmt.Errorf("writing execution summary failed item: %w", err)
 		}
 	}
