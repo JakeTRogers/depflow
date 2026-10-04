@@ -179,12 +179,12 @@ pick #31 [ci] Bump actions/checkout from 7.0.0 to 7.0.1
 pick #28 [patch] Bump golang.org/x/sys from 0.46.0 to 0.47.0
 pick #22 [minor] Bump github.com/spf13/cobra from 1.9.0 to 1.10.2
 
-# Excluded by default filters. Change "skip" to "pick" to include:
+# Not included by default. Change "skip" to "pick" to include:
 skip #40 [major] Bump foo from 1.4.0 to 2.0.0  # change-kind "major" not in --change-kind allow-list
 ```
 
 - PRs run in the order of their `pick` lines. The command and PR number control execution. The optional bucket records what the PR was when planned and is checked for drift (see below), while the title is informational; changing the bucket does not change execution order.
-- PRs held back only by the default `--change-kind` and draft filters are listed as `skip` lines so you can include them. PRs removed by filters you pass explicitly (for example `--exclude-ecosystem npm-and-yarn` or `--change-kind patch`) are left out of the file.
+- PRs held back only by the default `--change-kind` and draft filters, or cut by `--limit`, are listed as `skip` lines so you can include them. PRs removed by filters you pass explicitly (for example `--exclude-ecosystem npm-and-yarn` or `--change-kind patch`) are left out of the file.
 - Before anything is changed, every picked PR is checked against the currently open Dependabot PRs. Picks that aren't open Dependabot PRs (merged since the plan was written, or never from Dependabot) are reported under `Not processed` and skipped, so a stale or hand-edited plan can never merge anything else.
 - The `repo` line must match the target repository (`--repo`, or the one `gh` infers).
 - When running a plan, depflow warns if a PR's bucket has changed since the plan was written. A pick that has become `[major]` (for example, Dependabot moved it to a new major version) is not processed and is reported under `Not processed`; change its bucket to `[major]` in the plan file to include it anyway. A `pick` line with no bucket is not checked.
@@ -204,7 +204,7 @@ depflow 0.1.0 (linux/amd64)
 
 - `--config PATH` — use an explicit YAML preferences file instead of the user default
 - `--repo [HOST/]OWNER/REPO` — target an explicit GitHub repository; if omitted, `gh` attempts to infer the current repository and `execute` resolves that repo before mutating operations
-- `--limit N` — maximum number of eligible Dependabot pull requests to return after classification filtering (default: 100). Discovery expands the underlying open-PR query as needed, capped at 1000 pull requests, so PRs filtered out do not count against the limit.
+- `--limit N` — maximum number of eligible Dependabot pull requests to return after classification filtering (default: 100). Discovery expands the underlying open-PR query as needed, capped at 1000 pull requests, so PRs filtered out do not count against the limit. `plan` and `execute` keep the first N PRs in processing order and report how many more were cut; plan files list the cut PRs as `skip` lines. `scan` keeps the first N by PR number.
 - `-v, --verbose` — increase execute log verbosity (`-v` for info, `-vv` for debug, `-vvv` for trace)
 - `--ecosystem`, `--exclude-ecosystem`, `--dependency`, `--exclude-dependency`, `--require-label`, `--exclude-label`, `--skip-grouped` — see [Filtering](#filtering); shared by `scan`, `plan`, and `execute`
 

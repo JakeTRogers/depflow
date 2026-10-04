@@ -53,13 +53,13 @@ func (c planFileContents) empty() bool {
 	return len(c.picks) == 0 && len(c.skips) == 0
 }
 
-// buildPlanFileContents plans prs with the user's filters. PRs held back only by the default
-// change-kind or draft filters become skip lines so an explicit edit can include them; PRs
-// excluded by filters the user typed are left out of the file entirely.
+// buildPlanFileContents plans prs with the user's filters. PRs cut by --limit, or held back only
+// by the default change-kind or draft filters, become skip lines so an explicit edit can include
+// them; PRs excluded by filters the user typed are left out of the file entirely.
 func buildPlanFileContents(cmd *cobra.Command, prs []dependabot.PR, opts *commandOptions, changeKinds []dependabot.ChangeKind, includeDrafts bool) planFileContents {
 	filterOpts := buildFilterOptions(opts, changeKinds, includeDrafts, true)
 	included, excluded := dependabot.Filter(prs, filterOpts)
-	included = applyLimit(included, opts)
+	planned, overLimit := limitPlan(planner.Build(included), opts)
 
 	candidateOpts := filterOpts
 	if !cmd.Flags().Changed("change-kind") {
@@ -83,12 +83,15 @@ func buildPlanFileContents(cmd *cobra.Command, prs []dependabot.PR, opts *comman
 	}
 
 	skipPlan := planner.Build(skipPRs)
-	skips := make([]planfile.Skipped, 0, len(skipPlan.Items))
+	skips := make([]planfile.Skipped, 0, len(overLimit)+len(skipPlan.Items))
+	for _, item := range overLimit {
+		skips = append(skips, planfile.Skipped{Item: item, Reason: limitReason(opts)})
+	}
 	for _, item := range skipPlan.Items {
 		skips = append(skips, planfile.Skipped{Item: item, Reason: reasons[item.PR.Number]})
 	}
 
-	return planFileContents{picks: planner.Build(included).Items, skips: skips}
+	return planFileContents{picks: planned.Items, skips: skips}
 }
 
 type bucketDrift struct {

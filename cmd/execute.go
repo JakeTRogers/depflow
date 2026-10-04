@@ -89,14 +89,16 @@ func newExecuteCommand(deps commandDeps, opts *commandOptions) *cobra.Command {
 
 			filterOpts := buildFilterOptions(opts, changeKinds, execOpts.includeDrafts, true)
 			included, excluded := dependabot.Filter(prs, filterOpts)
-			included = applyLimit(included, opts)
+			plan, overLimit := limitPlan(planner.Build(included), opts)
 			if len(excluded) > 0 {
 				if err := writeExcludedPRs(cmd.OutOrStdout(), excludedPRsHeading, excluded); err != nil {
 					return err
 				}
 			}
+			if err := writeLimitNotice(cmd.OutOrStdout(), len(overLimit), opts); err != nil {
+				return err
+			}
 
-			plan := planner.Build(included)
 			if len(plan.Items) == 0 {
 				if len(excluded) > 0 {
 					if _, err := fmt.Fprintln(cmd.OutOrStdout()); err != nil {
@@ -113,7 +115,7 @@ func newExecuteCommand(deps commandDeps, opts *commandOptions) *cobra.Command {
 				return nil
 			}
 
-			if len(excluded) > 0 {
+			if len(excluded) > 0 || len(overLimit) > 0 {
 				if _, err := fmt.Fprintln(cmd.OutOrStdout()); err != nil {
 					return fmt.Errorf("writing execute output spacing: %w", err)
 				}

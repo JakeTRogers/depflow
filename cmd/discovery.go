@@ -3,11 +3,13 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 
 	"github.com/JakeTRogers/depflow/internal/dependabot"
 	"github.com/JakeTRogers/depflow/internal/githubcli"
+	"github.com/JakeTRogers/depflow/internal/planner"
 	"github.com/spf13/cobra"
 )
 
@@ -47,6 +49,30 @@ func applyLimit(prs []dependabot.PR, opts *commandOptions) []dependabot.PR {
 		return prs[:opts.limit]
 	}
 	return prs
+}
+
+// limitPlan keeps the first opts.limit items of an ordered plan, so --limit selects the PRs that
+// would be processed first, and returns the items it cut.
+func limitPlan(plan planner.Plan, opts *commandOptions) (planner.Plan, []planner.PlannedPR) {
+	if len(plan.Items) <= opts.limit {
+		return plan, nil
+	}
+	return planner.Plan{Items: plan.Items[:opts.limit:opts.limit]}, plan.Items[opts.limit:]
+}
+
+// limitReason explains why a PR cut by --limit was left out.
+func limitReason(opts *commandOptions) string {
+	return fmt.Sprintf("beyond --limit %d", opts.limit)
+}
+
+func writeLimitNotice(writer io.Writer, cut int, opts *commandOptions) error {
+	if cut == 0 {
+		return nil
+	}
+	if _, err := fmt.Fprintf(writer, "Not included: %d more eligible PR(s) %s\n", cut, limitReason(opts)); err != nil {
+		return fmt.Errorf("writing limit notice: %w", err)
+	}
+	return nil
 }
 
 func listOpenPullRequestsForDiscovery(ctx context.Context, deps commandDeps, opts *commandOptions) ([]githubcli.PullRequest, error) {

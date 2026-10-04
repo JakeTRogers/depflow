@@ -771,3 +771,69 @@ func dryRunNumbers(stdout string) []string {
 	}
 	return numbers
 }
+
+func TestLimitKeepsFirstPRsInPlanOrder(t *testing.T) {
+	t.Parallel()
+
+	// planFileFixture plans #13 [ci], #10 [patch], #11 [minor]; the lowest-numbered PRs (#10, #11)
+	// are not the first ones in plan order.
+	tests := []struct {
+		name       string
+		args       []string
+		wantStdout []string
+		wantAbsent []string
+	}{
+		{
+			name: "plan",
+			args: []string{"--limit", "1", "plan"},
+			wantStdout: []string{
+				"Planned order for 1 Dependabot pull request(s)",
+				"#13",
+				"Not included: 2 more eligible PR(s) beyond --limit 1\n",
+			},
+			wantAbsent: []string{"#10", "#11"},
+		},
+		{
+			name: "execute dry run",
+			args: []string{"--limit", "2", "execute", "--dry-run"},
+			wantStdout: []string{
+				"Not included: 1 more eligible PR(s) beyond --limit 2\n\nDry run: 2 PR(s) would be processed in this order:",
+				"1. #13 [ci]",
+				"2. #10 [patch]",
+			},
+			wantAbsent: []string{"#11 [minor]"},
+		},
+		{
+			name: "plan file lists cut PRs as skips",
+			args: []string{"--limit", "1", "plan", "-o", "-"},
+			wantStdout: []string{
+				"pick #13 [ci]",
+				"skip #10 [patch] Bump lodash from 4.17.20 to 4.17.21  # beyond --limit 1\nskip #11 [minor] Bump axios from 1.6.0 to 1.7.0  # beyond --limit 1\nskip #14 [patch]",
+			},
+			wantAbsent: []string{"pick #10", "pick #11"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			operator := &fakeExecuteOperator{}
+			args := append([]string{"--repo", "owner/repo"}, test.args...)
+			run := runWithDeps(t, commandDeps{lister: planFileFixture(), operator: operator}, "", args...)
+			if run.err != nil {
+				t.Fatalf("Execute() error = %v", run.err)
+			}
+			for _, fragment := range test.wantStdout {
+				if !strings.Contains(run.stdout, fragment) {
+					t.Fatalf("stdout missing %q:\n%s", fragment, run.stdout)
+				}
+			}
+			for _, fragment := range test.wantAbsent {
+				if strings.Contains(run.stdout, fragment) {
+					t.Fatalf("stdout should not contain %q:\n%s", fragment, run.stdout)
+				}
+			}
+		})
+	}
+}

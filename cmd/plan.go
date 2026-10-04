@@ -45,8 +45,7 @@ func newPlanCommand(deps commandDeps, opts *commandOptions) *cobra.Command {
 
 			filterOpts := buildFilterOptions(opts, changeKinds, planOpts.includeDrafts, true)
 			included, excluded := dependabot.Filter(prs, filterOpts)
-			included = applyLimit(included, opts)
-			plan := planner.Build(included)
+			plan, overLimit := limitPlan(planner.Build(included), opts)
 			if len(plan.Items) == 0 && len(excluded) == 0 {
 				if _, err := fmt.Fprintln(cmd.OutOrStdout(), noOpenDependabotPRsMessage); err != nil {
 					return fmt.Errorf("writing plan output: %w", err)
@@ -73,7 +72,12 @@ func newPlanCommand(deps commandDeps, opts *commandOptions) *cobra.Command {
 				}
 			}
 
-			return nil
+			if len(overLimit) > 0 {
+				if _, err := fmt.Fprintln(cmd.OutOrStdout()); err != nil {
+					return fmt.Errorf("writing plan output spacing: %w", err)
+				}
+			}
+			return writeLimitNotice(cmd.OutOrStdout(), len(overLimit), opts)
 		},
 	}
 
