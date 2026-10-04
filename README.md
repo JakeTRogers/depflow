@@ -29,7 +29,7 @@ PRs excluded by any filter are listed with their specific reason under an `Exclu
 
 Lists open Dependabot pull requests with metadata including classification signals: ecosystem, change kind, grouping, developer tooling, and infrastructure sensitivity.
 
-Developer-tooling and infrastructure-sensitive hints use keywords from the dependency name parsed from the PR title, or the lead dependency of a grouped update. Project paths, labels, group names, and other title text do not set these hints. When the name can only be inferred from a branch, it is still displayed but does not contribute risk hints. These are keyword heuristics, not a complete assessment of dependency risk, and apply to `scan`, `plan`, and `execute` alike.
+Developer-tooling and infrastructure-sensitive hints use keywords from the dependency name parsed from the PR title, or the lead dependency of a grouped update. Keywords match whole name segments split on punctuation, so `@aws-sdk/client-s3` matches `aws` but `drawsvg` does not. Project paths, labels, group names, and other title text do not set these hints. When the name can only be inferred from a branch, it is still displayed but does not contribute risk hints. These are keyword heuristics, not a complete assessment of dependency risk, and apply to `scan`, `plan`, and `execute` alike.
 
 ### plan
 

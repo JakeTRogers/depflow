@@ -763,3 +763,53 @@ func TestClassifyGroupedBodyIgnoresCommitSHAUpdates(t *testing.T) {
 		t.Fatal("ContainsMajorUpdate = true, want false for a commit SHA update")
 	}
 }
+
+func TestClassifyKeywordsMatchWholeNameSegments(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		dependency string
+		wantDev    []string
+		wantInfra  []string
+	}{
+		{dependency: "python-social-auth"},
+		{dependency: "velocity"},
+		{dependency: "drawsvg"},
+		{dependency: "toxiproxy"},
+		{dependency: "org.testcontainers:testcontainers"},
+		{dependency: "blackfriday"},
+		{dependency: "@aws-sdk/client-s3", wantInfra: []string{"aws"}},
+		{dependency: "software.amazon.awssdk:s3", wantInfra: []string{"awssdk"}},
+		{dependency: "awscli", wantInfra: []string{"awscli"}},
+		{dependency: "github.com/containerd/containerd", wantInfra: []string{"containerd"}},
+		{dependency: "@google-cloud/storage", wantInfra: []string{"google-cloud"}},
+		{dependency: "k8s.io/client-go", wantInfra: []string{"k8s"}},
+		{dependency: "docker/build-push-action", wantInfra: []string{"docker"}},
+		{dependency: "github.com/golangci/golangci-lint", wantDev: []string{"golangci-lint"}},
+		{dependency: "@typescript-eslint/parser", wantDev: []string{"eslint"}},
+		{dependency: "pytest_asyncio", wantDev: []string{"pytest"}},
+		{dependency: "@vitest/coverage-v8", wantDev: []string{"coverage", "vitest"}},
+		{dependency: "tox", wantDev: []string{"tox"}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.dependency, func(t *testing.T) {
+			t.Parallel()
+
+			classification := classify("Bump "+test.dependency+" from 1.0.0 to 1.0.1", "", "", nil)
+			if !reflect.DeepEqual(nonNil(classification.DevToolingKeywords), nonNil(test.wantDev)) {
+				t.Fatalf("DevToolingKeywords = %v, want %v", classification.DevToolingKeywords, test.wantDev)
+			}
+			if !reflect.DeepEqual(nonNil(classification.InfraSensitiveKeywords), nonNil(test.wantInfra)) {
+				t.Fatalf("InfraSensitiveKeywords = %v, want %v", classification.InfraSensitiveKeywords, test.wantInfra)
+			}
+		})
+	}
+}
+
+func nonNil(values []string) []string {
+	if values == nil {
+		return []string{}
+	}
+	return values
+}

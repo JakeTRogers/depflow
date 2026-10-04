@@ -4,6 +4,7 @@ package dependabot
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -51,6 +52,7 @@ var (
 	versionPattern                = regexp.MustCompile(`(?i)^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?`)
 	commitSHAPattern              = regexp.MustCompile(`(?i)^[0-9a-f]{7,40}$`)
 	headVersionPattern            = regexp.MustCompile(`-(v?\d+(?:\.\d+){0,2}[^/]*)$`)
+	keywordSeparatorPattern       = regexp.MustCompile(`[^a-z0-9]+`)
 
 	canonicalDependabotAuthors = map[string]struct{}{
 		"app/dependabot":          {},
@@ -91,8 +93,11 @@ var (
 		"aks",
 		"ansible",
 		"aws",
+		"awscli",
+		"awssdk",
 		"azure",
 		"container",
+		"containerd",
 		"docker",
 		"eks",
 		"gcp",
@@ -345,11 +350,21 @@ func dependencySignalText(title string) string {
 	return ""
 }
 
+// keywordTokens splits text into lowercase alphanumeric segments, so "@aws-sdk/client-s3" becomes
+// [aws sdk client s3].
+func keywordTokens(text string) []string {
+	return strings.Fields(keywordSeparatorPattern.ReplaceAllString(strings.ToLower(text), " "))
+}
+
+// matchKeywords returns the keywords whose segments appear consecutively among the segments of
+// signalText. Matching whole segments keeps "oci" from matching "social" and "tox" from matching
+// "toxiproxy", while multi-segment keywords such as "golangci-lint" still match.
 func matchKeywords(signalText string, keywords []string) []string {
+	tokens := keywordTokens(signalText)
 	matches := make([]string, 0, len(keywords))
 	seen := make(map[string]struct{}, len(keywords))
 	for _, keyword := range keywords {
-		if !strings.Contains(signalText, keyword) {
+		if !containsTokenSequence(tokens, keywordTokens(keyword)) {
 			continue
 		}
 		if _, ok := seen[keyword]; ok {
@@ -361,6 +376,18 @@ func matchKeywords(signalText string, keywords []string) []string {
 
 	sort.Strings(matches)
 	return matches
+}
+
+func containsTokenSequence(tokens, sequence []string) bool {
+	if len(sequence) == 0 {
+		return false
+	}
+	for start := 0; start+len(sequence) <= len(tokens); start++ {
+		if slices.Equal(tokens[start:start+len(sequence)], sequence) {
+			return true
+		}
+	}
+	return false
 }
 
 func inferChangeKind(previousVersion, nextVersion string) ChangeKind {
