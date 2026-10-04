@@ -43,6 +43,9 @@ func newPlanCommand(deps commandDeps, opts *commandOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if err := warnUnmatchedEcosystems(cmd.ErrOrStderr(), prs, opts); err != nil {
+				return err
+			}
 
 			if planOpts.output != "" {
 				return writePlanFile(cmd, deps, opts, prs, changeKinds, planOpts)

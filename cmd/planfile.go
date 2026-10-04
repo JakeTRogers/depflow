@@ -281,6 +281,9 @@ func planFromEditor(cmd *cobra.Command, deps commandDeps, opts *commandOptions, 
 	if err != nil {
 		return planFileResolution{}, "", false, err
 	}
+	if err := warnUnmatchedEcosystems(cmd.ErrOrStderr(), prs, opts); err != nil {
+		return planFileResolution{}, "", false, err
+	}
 	if len(prs) == 0 {
 		return planFileResolution{}, "", false, printLine(cmd.OutOrStdout(), noOpenDependabotPRsMessage)
 	}

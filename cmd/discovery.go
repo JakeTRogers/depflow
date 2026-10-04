@@ -51,6 +51,42 @@ func applyLimit(prs []dependabot.PR, opts *commandOptions) []dependabot.PR {
 	return prs
 }
 
+// warnUnmatchedEcosystems flags --ecosystem and --exclude-ecosystem values that match none of the
+// discovered PRs, which usually means a typo; for an exclusion that means nothing was excluded.
+func warnUnmatchedEcosystems(writer io.Writer, prs []dependabot.PR, opts *commandOptions) error {
+	if len(prs) == 0 {
+		return nil
+	}
+
+	found := make(map[string]struct{}, len(prs))
+	for _, pr := range prs {
+		found[dependabot.NormalizeEcosystem(pr.Classification.Ecosystem)] = struct{}{}
+	}
+	names := make([]string, 0, len(found))
+	for name := range found {
+		names = append(names, displayOrUnknown(name))
+	}
+	sort.Strings(names)
+
+	for _, flag := range []struct {
+		name   string
+		values []string
+	}{
+		{name: "ecosystem", values: opts.ecosystems},
+		{name: "exclude-ecosystem", values: opts.excludeEcosystems},
+	} {
+		for _, value := range flag.values {
+			if _, ok := found[dependabot.NormalizeEcosystem(value)]; ok {
+				continue
+			}
+			if _, err := fmt.Fprintf(writer, "Warning: --%s %q matches no open Dependabot PRs (ecosystems found: %s)\n", flag.name, sanitize(value), sanitize(strings.Join(names, ", "))); err != nil {
+				return fmt.Errorf("writing ecosystem warning: %w", err)
+			}
+		}
+	}
+	return nil
+}
+
 // limitPlan keeps the first opts.limit items of an ordered plan, so --limit selects the PRs that
 // would be processed first, and returns the items it cut.
 func limitPlan(plan planner.Plan, opts *commandOptions) (planner.Plan, []planner.PlannedPR) {

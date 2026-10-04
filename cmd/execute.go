@@ -91,6 +91,9 @@ func newExecuteCommand(deps commandDeps, opts *commandOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if err := warnUnmatchedEcosystems(cmd.ErrOrStderr(), prs, opts); err != nil {
+				return err
+			}
 
 			filterOpts := buildFilterOptions(opts, changeKinds, execOpts.includeDrafts, true)
 			included, excluded := dependabot.Filter(prs, filterOpts)

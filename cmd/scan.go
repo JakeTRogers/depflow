@@ -18,6 +18,9 @@ func newScanCommand(deps commandDeps, opts *commandOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if err := warnUnmatchedEcosystems(cmd.ErrOrStderr(), prs, opts); err != nil {
+				return err
+			}
 
 			filterOpts := buildFilterOptions(opts, nil, true, false)
 			prs, _ = dependabot.Filter(prs, filterOpts)

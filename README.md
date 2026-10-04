@@ -10,7 +10,7 @@ By default, `plan` and `execute` exclude major version updates and draft PRs; us
 
 `scan`, `plan`, and `execute` share a set of classification-based filters built from the same signals shown by `scan` (ecosystem, dependency name, labels, grouping):
 
-- `--ecosystem` / `--exclude-ecosystem` — allow-list / deny-list by ecosystem (repeatable or comma-separated)
+- `--ecosystem` / `--exclude-ecosystem` — allow-list / deny-list by ecosystem (repeatable or comma-separated). Names are case-insensitive, `_` and `-` are interchangeable, and `dependabot.yml` names are accepted (`npm` for `npm-and-yarn`, `gomod` for `go-modules`, `mix` for `hex`, `gitsubmodule` for `submodules`). A value that matches no open Dependabot PR prints a warning on stderr listing the ecosystems found.
 - `--dependency` / `--exclude-dependency` — allow-list / deny-list by substring match against the dependency name (repeatable or comma-separated, case-insensitive)
 - `--require-label` — only include PRs that have **all** of the given labels (repeatable or comma-separated)
 - `--exclude-label` — exclude PRs that have **any** of the given labels (repeatable or comma-separated)

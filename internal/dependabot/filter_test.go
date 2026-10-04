@@ -253,3 +253,49 @@ func TestParseChangeKind(t *testing.T) {
 		})
 	}
 }
+
+func TestNormalizeEcosystem(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]string{
+		"go-modules":     "go-modules",
+		"go_modules":     "go-modules",
+		"GO-MODULES":     "go-modules",
+		"gomod":          "go-modules",
+		" npm ":          "npm-and-yarn",
+		"npm_and_yarn":   "npm-and-yarn",
+		"yarn":           "npm-and-yarn",
+		"github_actions": "github-actions",
+		"actions":        "github-actions",
+		"pre_commit":     "pre-commit",
+		"mix":            "hex",
+		"gitsubmodule":   "submodules",
+		"cargo":          "cargo",
+		"":               "",
+	}
+	for input, want := range tests {
+		if got := NormalizeEcosystem(input); got != want {
+			t.Errorf("NormalizeEcosystem(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
+func TestFilterEcosystemAcceptsDependabotConfigNames(t *testing.T) {
+	t.Parallel()
+
+	prs := []PR{
+		newFilterPR(1, "go", false, nil, Classification{Ecosystem: "go-modules"}),
+		newFilterPR(2, "npm", false, nil, Classification{Ecosystem: "npm-and-yarn"}),
+		newFilterPR(3, "actions", false, nil, Classification{Ecosystem: "github-actions"}),
+	}
+
+	included, _ := Filter(prs, FilterOptions{Ecosystems: []string{"gomod", "github_actions"}})
+	if got := includedNumbers(included); !reflect.DeepEqual(got, []int{1, 3}) {
+		t.Fatalf("allow-list included = %v, want [1 3]", got)
+	}
+
+	included, _ = Filter(prs, FilterOptions{ExcludeEcosystems: []string{"npm"}})
+	if got := includedNumbers(included); !reflect.DeepEqual(got, []int{1, 3}) {
+		t.Fatalf("deny-list included = %v, want [1 3]", got)
+	}
+}
