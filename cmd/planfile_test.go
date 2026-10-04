@@ -242,6 +242,47 @@ func TestPlanOutputReportsEmptyResultsOnStderr(t *testing.T) {
 	}
 }
 
+func TestPlanOutputFileRefusesToOverwrite(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "plan.txt")
+	const edited = "repo owner/repo\npick #10 [patch] hand-edited\n"
+	if err := os.WriteFile(path, []byte(edited), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	run := runWithDeps(t, commandDeps{lister: planFileFixture()}, "", "--repo", "owner/repo", "plan", "-o", path)
+	if run.err == nil || !strings.Contains(run.err.Error(), "already exists; pass --force to overwrite it") {
+		t.Fatalf("error = %v, want already exists error", run.err)
+	}
+	if content, err := os.ReadFile(path); err != nil || string(content) != edited {
+		t.Fatalf("existing plan changed: %q, %v", content, err)
+	}
+
+	run = runWithDeps(t, commandDeps{lister: planFileFixture()}, "", "--repo", "owner/repo", "plan", "-o", path, "--force")
+	if run.err != nil {
+		t.Fatalf("Execute() with --force error = %v", run.err)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if strings.Contains(string(content), "hand-edited") || !strings.Contains(string(content), "pick #13 [ci]") {
+		t.Fatalf("--force did not replace the plan:\n%s", content)
+	}
+}
+
+func TestPlanForceRequiresOutputFile(t *testing.T) {
+	t.Parallel()
+
+	for _, args := range [][]string{{"plan", "--force"}, {"plan", "-o", "-", "--force"}} {
+		run := runWithDeps(t, commandDeps{lister: planFileFixture()}, "", append([]string{"--repo", "owner/repo"}, args...)...)
+		if run.err == nil || !strings.Contains(run.err.Error(), "--force only applies") {
+			t.Fatalf("%v: error = %v, want --force usage error", args, run.err)
+		}
+	}
+}
+
 func TestPlanOutputFileCreateError(t *testing.T) {
 	t.Parallel()
 

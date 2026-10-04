@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"strings"
 	"text/tabwriter"
@@ -20,6 +21,7 @@ type planOptions struct {
 	includeDrafts bool
 	details       bool
 	output        string
+	force         bool
 }
 
 func newPlanCommand(deps commandDeps, opts *commandOptions) *cobra.Command {
@@ -29,6 +31,9 @@ func newPlanCommand(deps commandDeps, opts *commandOptions) *cobra.Command {
 		Use:   "plan",
 		Short: "Show the deterministic Dependabot processing order",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if planOpts.force && (planOpts.output == "" || planOpts.output == "-") {
+				return errors.New("--force only applies when writing a plan file with --output FILE")
+			}
 			changeKinds, err := parseChangeKinds(planOpts.changeKind)
 			if err != nil {
 				return err
@@ -88,6 +93,7 @@ func newPlanCommand(deps commandDeps, opts *commandOptions) *cobra.Command {
 	cmd.Flags().BoolVar(&planOpts.includeDrafts, "include-drafts", false, "include draft Dependabot PRs in planning")
 	cmd.Flags().BoolVar(&planOpts.details, "details", false, "show full titles, classification signals, reasons, and URLs instead of the compact table")
 	cmd.Flags().StringVarP(&planOpts.output, "output", "o", "", "write an editable plan file for `depflow execute --plan` (- for stdout)")
+	cmd.Flags().BoolVar(&planOpts.force, "force", false, "overwrite an existing --output file")
 	cmd.MarkFlagsMutuallyExclusive("details", "output")
 
 	return cmd
@@ -198,7 +204,16 @@ func writePlanFile(cmd *cobra.Command, deps commandDeps, opts *commandOptions, p
 		return planfile.Write(cmd.OutOrStdout(), repo, time.Now(), contents.picks, contents.skips)
 	}
 
-	file, err := os.Create(planOpts.output)
+	// O_EXCL refuses an existing file in the same step that creates it, so a hand-edited plan is
+	// never replaced unless --force asks for that.
+	flags := os.O_WRONLY | os.O_CREATE | os.O_EXCL
+	if planOpts.force {
+		flags = os.O_WRONLY | os.O_CREATE | os.O_TRUNC
+	}
+	file, err := os.OpenFile(planOpts.output, flags, 0o644)
+	if errors.Is(err, fs.ErrExist) {
+		return fmt.Errorf("plan file %s already exists; pass --force to overwrite it", planOpts.output)
+	}
 	if err != nil {
 		return fmt.Errorf("creating plan file: %w", err)
 	}

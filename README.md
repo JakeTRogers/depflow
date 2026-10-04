@@ -39,6 +39,7 @@ The default listing is a compact table with execution order, PR number, bucket, 
 
 - `--details`: show full titles, classification signals, reasons, and URLs instead of the compact table
 - `-o, --output FILE` — write an [editable plan file](#editing-the-plan) instead of the listing (`-` writes it to stdout); cannot be combined with `--details`
+- `--force` — overwrite an existing `--output` file; without it, `plan -o` refuses to replace a file so an edited plan is not lost
 
 ```bash
 depflow plan
