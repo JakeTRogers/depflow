@@ -226,11 +226,17 @@ func runPlan(cmd *cobra.Command, deps commandDeps, opts *commandOptions, execOpt
 	result, err := executor.Run(cmd.Context(), deps.operator, plan, repo, cfg, log, ui)
 
 	ui.Stop()
-	if printErr := printResult(cmd.OutOrStdout(), result, execOpts.showTiming); printErr != nil {
+	resume, notAttempted := resumeItems(plan, result)
+	if printErr := printResult(cmd.OutOrStdout(), result, notAttempted, execOpts.showTiming); printErr != nil {
 		if err != nil {
 			return errors.Join(err, printErr)
 		}
 		return printErr
+	}
+	if err != nil && len(resume) > 0 && deps.resumeDir != "" {
+		if resumeErr := writeResumePlan(cmd, deps, resume, result, repo); resumeErr != nil {
+			return errors.Join(err, resumeErr)
+		}
 	}
 	return err
 }
@@ -320,7 +326,7 @@ func printPlanOrder(w io.Writer, header string, plan planner.Plan) error {
 	return nil
 }
 
-func printResult(w io.Writer, result *executor.Result, showTiming bool) error {
+func printResult(w io.Writer, result *executor.Result, notAttempted []int, showTiming bool) error {
 	if result == nil {
 		return nil
 	}
@@ -363,5 +369,5 @@ func printResult(w io.Writer, result *executor.Result, showTiming bool) error {
 		return fmt.Errorf("writing execution summary trailing newline: %w", err)
 	}
 
-	return nil
+	return writeNotAttempted(w, notAttempted)
 }

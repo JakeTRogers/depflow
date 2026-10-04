@@ -81,6 +81,9 @@ type PRResult struct {
 	Status   prStatus
 	Error    error
 	Duration time.Duration
+	// Merged is true once the PR was merged, including when post-merge CI then failed and Status
+	// became failed.
+	Merged bool
 }
 
 // Result is the overall execution outcome.
@@ -140,6 +143,7 @@ func Run(ctx context.Context, op Operator, plan planner.Plan, repo string, cfg C
 			Status:   status,
 			Error:    err,
 			Duration: time.Since(itemStart),
+			Merged:   status == statusMerged,
 		})
 		progress.Increment()
 	}

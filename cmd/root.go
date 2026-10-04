@@ -31,6 +31,8 @@ type commandDeps struct {
 	operator prOperator
 	resolver repoResolver
 	editor   planEditor
+	// resumeDir is where execute writes a resume plan after stopping early; empty disables it.
+	resumeDir string
 }
 
 type commandOptions struct {
@@ -53,10 +55,11 @@ func defaultDeps() (commandDeps, error) {
 	client := githubcli.NewLazyClient()
 
 	return commandDeps{
-		lister:   client,
-		operator: client,
-		resolver: client,
-		editor:   newTerminalEditor(),
+		lister:    client,
+		operator:  client,
+		resolver:  client,
+		editor:    newTerminalEditor(),
+		resumeDir: os.TempDir(),
 	}, nil
 }
 
