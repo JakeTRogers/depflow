@@ -95,7 +95,7 @@ func newPlanCommand(deps commandDeps, opts *commandOptions) *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&planOpts.includeDrafts, "include-drafts", false, "include draft Dependabot PRs in planning")
 	cmd.Flags().BoolVar(&planOpts.details, "details", false, "show full titles, classification signals, reasons, and URLs instead of the compact table")
-	cmd.Flags().StringVarP(&planOpts.output, "output", "o", "", "write an editable plan file for `depflow execute --plan` (- for stdout)")
+	cmd.Flags().StringVarP(&planOpts.output, "output", "o", "", "write an editable plan `FILE` for depflow execute --plan (- for stdout)")
 	cmd.Flags().BoolVar(&planOpts.force, "force", false, "overwrite an existing --output file")
 	cmd.MarkFlagsMutuallyExclusive("details", "output")
 

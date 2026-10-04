@@ -139,7 +139,7 @@ func newExecuteCommand(deps commandDeps, opts *commandOptions) *cobra.Command {
 		panic(err)
 	}
 	cmd.Flags().BoolVar(&execOpts.edit, "edit", false, "edit the plan in $VISUAL/$EDITOR before executing (reorder lines, pick or skip PRs)")
-	cmd.Flags().StringVar(&execOpts.planPath, "plan", "", "execute a plan file written by `depflow plan -o` (- reads stdin)")
+	cmd.Flags().StringVar(&execOpts.planPath, "plan", "", "execute a plan `FILE` written by depflow plan -o (- reads stdin)")
 	cmd.MarkFlagsMutuallyExclusive("edit", "plan")
 	cmd.Flags().StringSliceVar(&execOpts.changeKind, "change-kind", defaultChangeKindValues, "include only these change kinds: patch, minor, major, unknown, or all")
 	if err := cmd.RegisterFlagCompletionFunc("change-kind", changeKindCompletions); err != nil {

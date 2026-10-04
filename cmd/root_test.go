@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"github.com/JakeTRogers/depflow/internal/githubcli"
+	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 )
 
 type fakeLister struct {
@@ -606,5 +608,45 @@ func TestVerboseFlagParsing(t *testing.T) {
 				t.Errorf("verbose count = %q, want %q", got, tc.wantCount)
 			}
 		})
+	}
+}
+
+// pflag turns the first backticked phrase of a flag's usage into its value placeholder, so a
+// quoted command such as `depflow plan -o` would render as "--plan depflow plan -o".
+func TestFlagPlaceholdersAreSingleWords(t *testing.T) {
+	t.Parallel()
+
+	var walk func(*cobra.Command)
+	walk = func(cmd *cobra.Command) {
+		check := func(flag *pflag.Flag) {
+			if placeholder, _ := pflag.UnquoteUsage(flag); strings.ContainsAny(placeholder, " \t") {
+				t.Errorf("%s --%s placeholder = %q, want a single word", cmd.CommandPath(), flag.Name, placeholder)
+			}
+		}
+		cmd.LocalFlags().VisitAll(check)
+		for _, child := range cmd.Commands() {
+			walk(child)
+		}
+	}
+	walk(newRootCommand(commandDeps{}))
+}
+
+func TestHelpShowsFilePlaceholders(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		args []string
+		want string
+	}{
+		{args: []string{"plan", "--help"}, want: "-o, --output FILE"},
+		{args: []string{"execute", "--help"}, want: "--plan FILE"},
+	} {
+		run := runWithDeps(t, commandDeps{}, "", test.args...)
+		if run.err != nil {
+			t.Fatalf("%v: Execute() error = %v", test.args, run.err)
+		}
+		if !strings.Contains(run.stdout, test.want) {
+			t.Fatalf("%v: help missing %q:\n%s", test.args, test.want, run.stdout)
+		}
 	}
 }
