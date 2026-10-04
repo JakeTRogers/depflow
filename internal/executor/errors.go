@@ -12,6 +12,8 @@ var (
 	ErrCheckTimeout = errors.New("CI check timeout exceeded")
 	// ErrBranchUpdateTimeout indicates waiting for a rebased branch update exceeded the configured timeout.
 	ErrBranchUpdateTimeout = errors.New("branch update timeout exceeded")
+	// ErrHeadChanged indicates the PR head commit moved after its CI checks were verified.
+	ErrHeadChanged = errors.New("head commit changed after CI checks passed")
 	// ErrMergeConflict indicates the PR cannot be merged because of conflicts.
 	ErrMergeConflict = errors.New("merge conflict detected")
 	// ErrPostMergeTimeout indicates waiting for post-merge CI exceeded the configured timeout.

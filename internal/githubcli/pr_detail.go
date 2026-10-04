@@ -14,6 +14,7 @@ type PRDetail struct {
 	Mergeable         string        `json:"mergeable"`
 	MergeCommit       MergeCommit   `json:"mergeCommit"`
 	HeadRefName       string        `json:"headRefName"`
+	HeadRefOid        string        `json:"headRefOid"`
 	BaseRefName       string        `json:"baseRefName"`
 	StatusCheckRollup []StatusCheck `json:"statusCheckRollup"`
 }
@@ -39,7 +40,7 @@ func (c *client) ViewPullRequest(ctx context.Context, repo string, number int) (
 		"view",
 		strconv.Itoa(number),
 		"--json",
-		"number,title,state,mergeable,mergeCommit,headRefName,baseRefName,statusCheckRollup",
+		"number,title,state,mergeable,mergeCommit,headRefName,headRefOid,baseRefName,statusCheckRollup",
 	}
 	if repo != "" {
 		args = append(args, "--repo", repo)

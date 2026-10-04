@@ -41,6 +41,7 @@ type fakeOperator struct {
 	approveCalls   []int
 	mergeCalls     []int
 	mergeAdmin     []bool
+	mergeSHAs      []string
 	commentCalls   []commentCall
 	callSequence   []string
 	compareResults []githubcli.BranchComparison
@@ -67,7 +68,7 @@ func (f *fakeOperator) ViewPullRequest(_ context.Context, _ string, number int) 
 	return result, nil
 }
 
-func (f *fakeOperator) MergePullRequest(_ context.Context, _ string, number int, admin bool, method string) error {
+func (f *fakeOperator) MergePullRequest(_ context.Context, _ string, number int, admin bool, method, headSHA string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -75,6 +76,7 @@ func (f *fakeOperator) MergePullRequest(_ context.Context, _ string, number int,
 	f.mergeCalls = append(f.mergeCalls, number)
 	f.mergeAdmin = append(f.mergeAdmin, admin)
 	f.mergeMethods = append(f.mergeMethods, method)
+	f.mergeSHAs = append(f.mergeSHAs, headSHA)
 	if err, ok := f.mergeErrors[number]; ok {
 		return err
 	}
@@ -951,5 +953,40 @@ func TestRunRecordedDurationIncludesPostMergeWait(t *testing.T) {
 	// duration must reflect that wait, not just the time up to the merge call.
 	if want := cfg.PollInterval * 2; result.Processed[0].Duration < want {
 		t.Fatalf("PR #1 duration = %s, want at least %s (post-merge wait should be included)", result.Processed[0].Duration, want)
+	}
+}
+
+func TestRunPinsVerifiedHeadCommit(t *testing.T) {
+	t.Parallel()
+
+	detail := githubcli.PRDetail{Number: 1, State: "OPEN", Mergeable: "MERGEABLE", HeadRefName: "branch", HeadRefOid: "sha-verified", BaseRefName: "main", StatusCheckRollup: []githubcli.StatusCheck{{Name: "ci", Conclusion: "success"}}}
+	op := &fakeOperator{viewResults: map[int][]githubcli.PRDetail{1: {detail, detail, detail}}, compareResults: []githubcli.BranchComparison{{}, {}}}
+
+	result, err := Run(context.Background(), op, newTestPlan(dependabot.PR{Number: 1}), "owner/repo", testConfig(), nil, nil)
+	if err != nil || len(result.Merged()) != 1 {
+		t.Fatalf("Run() = %+v, %v", result, err)
+	}
+	if len(op.mergeSHAs) != 1 || op.mergeSHAs[0] != "sha-verified" {
+		t.Fatalf("merge head SHAs = %v, want [sha-verified]", op.mergeSHAs)
+	}
+}
+
+func TestRunStopsWhenHeadChangesAfterChecks(t *testing.T) {
+	t.Parallel()
+
+	verified := githubcli.PRDetail{Number: 1, State: "OPEN", Mergeable: "MERGEABLE", HeadRefName: "branch", HeadRefOid: "sha-verified", BaseRefName: "main", StatusCheckRollup: []githubcli.StatusCheck{{Name: "ci", Conclusion: "success"}}}
+	moved := verified
+	moved.HeadRefOid = "sha-pushed-later"
+	op := &fakeOperator{viewResults: map[int][]githubcli.PRDetail{1: {verified, verified, moved}}, compareResults: []githubcli.BranchComparison{{}, {}}}
+
+	result, err := Run(context.Background(), op, newTestPlan(dependabot.PR{Number: 1}), "owner/repo", testConfig(), nil, nil)
+	if !errors.Is(err, ErrHeadChanged) {
+		t.Fatalf("error = %v, want %v", err, ErrHeadChanged)
+	}
+	if len(op.approveCalls) != 0 || len(op.mergeCalls) != 0 {
+		t.Fatalf("approved %v, merged %v; want neither", op.approveCalls, op.mergeCalls)
+	}
+	if failed := result.Failed(); failed == nil || failed.Item.PR.Number != 1 {
+		t.Fatalf("Failed() = %+v, want PR #1", failed)
 	}
 }

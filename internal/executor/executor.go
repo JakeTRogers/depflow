@@ -30,7 +30,7 @@ var sleepFunc = func(ctx context.Context, delay time.Duration) error {
 type Operator interface {
 	ViewPullRequest(ctx context.Context, repo string, number int) (githubcli.PRDetail, error)
 	ApprovePullRequest(ctx context.Context, repo string, number int) error
-	MergePullRequest(ctx context.Context, repo string, number int, admin bool, method string) error
+	MergePullRequest(ctx context.Context, repo string, number int, admin bool, method, headSHA string) error
 	CheckMergeAllowed(ctx context.Context, repo string, number int, method string) error
 	CommentOnPR(ctx context.Context, repo string, number int, body string) error
 	ListWorkflowRuns(ctx context.Context, repo string, branch string) ([]githubcli.WorkflowRun, error)
@@ -50,10 +50,13 @@ func (nopProgress) Increment()       {}
 
 // Config controls executor admin override, polling, and timeout behavior.
 type Config struct {
-	MergeMethod      string
-	Admin            bool
-	PollInterval     time.Duration
-	CheckTimeout     time.Duration
+	MergeMethod  string
+	Admin        bool
+	PollInterval time.Duration
+	CheckTimeout time.Duration
+	// CheckGrace is how long a PR with no reported checks, or a just-updated branch, is given
+	// for GitHub to register checks before the reported state is trusted.
+	CheckGrace       time.Duration
 	PostMergeDelay   time.Duration
 	PostMergeTimeout time.Duration
 	ShowChecks       bool
@@ -196,7 +199,8 @@ func Run(ctx context.Context, op Operator, plan planner.Plan, repo string, cfg C
 			return result, fmt.Errorf("comparing branches for PR #%d: %w", item.PR.Number, err)
 		}
 
-		if comparison.BehindBy > 0 {
+		rebased := comparison.BehindBy > 0
+		if rebased {
 			log.Info("branch behind base, requesting rebase", "number", item.PR.Number, "behind_by", comparison.BehindBy)
 			progress.SetStatus(fmt.Sprintf("Requesting rebase for PR #%d", item.PR.Number))
 			if err := op.CommentOnPR(ctx, repo, item.PR.Number, "@dependabot rebase"); err != nil {
@@ -209,7 +213,7 @@ func Run(ctx context.Context, op Operator, plan planner.Plan, repo string, cfg C
 			}
 		}
 
-		cr, err := waitForChecks(ctx, op, repo, item.PR.Number, cfg, log, progress)
+		cr, err := waitForChecks(ctx, op, repo, item.PR.Number, rebased, cfg, log, progress)
 		if err != nil {
 			record(item, statusFailed, err, fmt.Sprintf("Failed PR #%d", item.PR.Number))
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -229,6 +233,12 @@ func Run(ctx context.Context, op Operator, plan planner.Plan, repo string, cfg C
 		if err != nil {
 			record(item, statusFailed, err, fmt.Sprintf("Failed PR #%d", item.PR.Number))
 			return result, fmt.Errorf("re-checking PR #%d before merge: %w", item.PR.Number, err)
+		}
+
+		if cr.HeadSHA != "" && detail.HeadRefOid != cr.HeadSHA {
+			headErr := fmt.Errorf("PR #%d: checks passed for %s but head is now %s: %w", item.PR.Number, cr.HeadSHA, detail.HeadRefOid, ErrHeadChanged)
+			record(item, statusFailed, headErr, fmt.Sprintf("Failed PR #%d: head changed", item.PR.Number))
+			return result, executionFailure(item.PR.Number, headErr)
 		}
 
 		if detail.Mergeable == "CONFLICTING" {
@@ -260,7 +270,7 @@ func Run(ctx context.Context, op Operator, plan planner.Plan, repo string, cfg C
 		}
 
 		progress.SetStatus(fmt.Sprintf("Merging PR #%d", item.PR.Number))
-		if err := op.MergePullRequest(ctx, repo, item.PR.Number, cfg.Admin, cfg.MergeMethod); err != nil {
+		if err := op.MergePullRequest(ctx, repo, item.PR.Number, cfg.Admin, cfg.MergeMethod, cr.HeadSHA); err != nil {
 			record(item, statusFailed, err, fmt.Sprintf("Failed PR #%d", item.PR.Number))
 			return result, fmt.Errorf("merging PR #%d: %w", item.PR.Number, err)
 		}

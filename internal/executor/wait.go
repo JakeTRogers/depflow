@@ -19,6 +19,8 @@ type checkFailure struct {
 
 type checkResult struct {
 	Failed []checkFailure
+	// HeadSHA is the head commit whose checks were verified.
+	HeadSHA string
 }
 
 func isTerminalFailureConclusion(conclusion string) bool {
@@ -91,7 +93,12 @@ func summarizeChecks(checks []githubcli.StatusCheck) string {
 
 // waitForChecks polls ViewPullRequest until all status checks pass, a non-admin failure is observed,
 // admin-mode checks settle with failures, or the wait times out.
-func waitForChecks(ctx context.Context, op Operator, repo string, number int, cfg Config, log *slog.Logger, progress Progress) (checkResult, error) {
+//
+// GitHub registers checks for a new head commit asynchronously, so an empty check list is only
+// treated as "no CI configured" once cfg.CheckGrace has elapsed since observing that head.
+// After a branch update, including a head change observed while polling, passing checks are not
+// trusted before the grace period either, so checks that register late are not skipped.
+func waitForChecks(ctx context.Context, op Operator, repo string, number int, freshCommit bool, cfg Config, log *slog.Logger, progress Progress) (checkResult, error) {
 	start := time.Now()
 	progress.SetStatus(waitStatus(fmt.Sprintf("Waiting for CI on PR #%d", number), cfg, start, ""))
 
@@ -103,6 +110,8 @@ func waitForChecks(ctx context.Context, op Operator, repo string, number int, cf
 	stopTimer(timer)
 	defer stopTimer(timer)
 
+	var headSHA string
+	var graceStart time.Time
 	for {
 		detail, err := op.ViewPullRequest(ctx, repo, number)
 		if err != nil {
@@ -115,55 +124,63 @@ func waitForChecks(ctx context.Context, op Operator, repo string, number int, cf
 			return checkResult{}, fmt.Errorf("polling checks for PR #%d: %w", number, err)
 		}
 
+		if graceStart.IsZero() || detail.HeadRefOid != headSHA {
+			if !graceStart.IsZero() {
+				freshCommit = true
+			}
+			headSHA = detail.HeadRefOid
+			graceStart = time.Now()
+		}
+		graceElapsed := time.Since(graceStart) >= cfg.CheckGrace
 		checks := detail.StatusCheckRollup
+		summary := "no checks reported yet"
 		if len(checks) == 0 {
-			log.Info("no CI checks configured, proceeding", "number", number)
-			return checkResult{}, nil
-		}
+			if graceElapsed {
+				log.Info("no CI checks reported, proceeding", "number", number)
+				return checkResult{HeadSHA: detail.HeadRefOid}, nil
+			}
+		} else {
+			allTerminal := true
+			result := checkResult{HeadSHA: detail.HeadRefOid}
+			for _, c := range checks {
+				conclusion := strings.ToLower(c.Conclusion)
+				state := strings.ToLower(c.State)
 
-		allTerminal := true
-		result := checkResult{}
-		hasFailed := false
-		for _, c := range checks {
-			conclusion := strings.ToLower(c.Conclusion)
-			state := strings.ToLower(c.State)
+				if isTerminalFailureConclusion(conclusion) || state == "failure" || state == "error" {
+					name := c.Name
+					if name == "" {
+						name = c.Context
+					}
 
-			if isTerminalFailureConclusion(conclusion) || state == "failure" || state == "error" {
-				name := c.Name
-				if name == "" {
-					name = c.Context
+					failure := checkFailure{
+						Name:       name,
+						State:      state,
+						Conclusion: conclusion,
+					}
+					if !cfg.Admin {
+						result.Failed = []checkFailure{failure}
+						return result, fmt.Errorf("check %q failed for PR #%d: %w", failure.Name, number, ErrCheckFailed)
+					}
+
+					result.Failed = append(result.Failed, failure)
+					continue
 				}
 
-				failure := checkFailure{
-					Name:       name,
-					State:      state,
-					Conclusion: conclusion,
+				if conclusion != "success" && conclusion != "neutral" && conclusion != "skipped" && state != "success" {
+					allTerminal = false
 				}
-				if !cfg.Admin {
-					result.Failed = []checkFailure{failure}
-					return result, fmt.Errorf("check %q failed for PR #%d: %w", failure.Name, number, ErrCheckFailed)
-				}
-
-				result.Failed = append(result.Failed, failure)
-				hasFailed = true
-				continue
 			}
 
-			if conclusion != "success" && conclusion != "neutral" && conclusion != "skipped" && state != "success" {
-				allTerminal = false
-			}
-		}
-
-		if allTerminal {
-			if hasFailed {
+			if allTerminal && (graceElapsed || !freshCommit) {
+				if len(result.Failed) == 0 {
+					log.Info("all checks passed", "number", number)
+				}
 				return result, nil
 			}
-
-			log.Info("all checks passed", "number", number)
-			return checkResult{}, nil
+			summary = summarizeChecks(checks)
 		}
 
-		progress.SetStatus(waitStatus(fmt.Sprintf("Waiting for CI on PR #%d", number), cfg, start, summarizeChecks(checks)))
+		progress.SetStatus(waitStatus(fmt.Sprintf("Waiting for CI on PR #%d", number), cfg, start, summary))
 		log.Debug("checks still pending, waiting", "number", number, "interval", cfg.PollInterval)
 		resetTimer(timer, cfg.PollInterval)
 

@@ -14,7 +14,7 @@ func TestMergePullRequest(t *testing.T) {
 	executor := &stubExecutor{}
 	client := newClient(executor)
 
-	err := client.MergePullRequest(context.Background(), "", 42, false, "merge")
+	err := client.MergePullRequest(context.Background(), "", 42, false, "merge", "")
 	if err != nil {
 		t.Fatalf("MergePullRequest() error = %v", err)
 	}
@@ -40,7 +40,7 @@ func TestMergePullRequestWithRepo(t *testing.T) {
 	executor := &stubExecutor{}
 	client := newClient(executor)
 
-	err := client.MergePullRequest(context.Background(), "owner/repo", 42, false, "merge")
+	err := client.MergePullRequest(context.Background(), "owner/repo", 42, false, "merge", "")
 	if err != nil {
 		t.Fatalf("MergePullRequest() error = %v", err)
 	}
@@ -68,7 +68,7 @@ func TestMergePullRequestWithAdminAndRepo(t *testing.T) {
 	executor := &stubExecutor{}
 	client := newClient(executor)
 
-	err := client.MergePullRequest(context.Background(), "owner/repo", 42, true, "merge")
+	err := client.MergePullRequest(context.Background(), "owner/repo", 42, true, "merge", "")
 	if err != nil {
 		t.Fatalf("MergePullRequest() error = %v", err)
 	}
@@ -96,11 +96,41 @@ func TestMergePullRequestWrapsErrors(t *testing.T) {
 
 	client := newClient(&stubExecutor{err: errors.New("boom")})
 
-	err := client.MergePullRequest(context.Background(), "", 42, false, "merge")
+	err := client.MergePullRequest(context.Background(), "", 42, false, "merge", "")
 	if err == nil {
 		t.Fatal("MergePullRequest() error = nil, want non-nil")
 	}
 	if !strings.Contains(err.Error(), "merging pull request #42") {
 		t.Fatalf("error %q does not include context", err)
+	}
+}
+
+func TestMergePullRequestMatchesHeadCommit(t *testing.T) {
+	t.Parallel()
+
+	executor := &stubExecutor{}
+	client := newClient(executor)
+
+	err := client.MergePullRequest(context.Background(), "owner/repo", 42, false, "squash", "abc123")
+	if err != nil {
+		t.Fatalf("MergePullRequest() error = %v", err)
+	}
+
+	wantArgs := []string{
+		"pr",
+		"merge",
+		"42",
+		"--squash",
+		"--delete-branch",
+		"--match-head-commit",
+		"abc123",
+		"--repo",
+		"owner/repo",
+	}
+	if len(executor.calls) != 1 {
+		t.Fatalf("len(calls) = %d, want 1", len(executor.calls))
+	}
+	if !reflect.DeepEqual(executor.calls[0], wantArgs) {
+		t.Fatalf("args = %#v, want %#v", executor.calls[0], wantArgs)
 	}
 }

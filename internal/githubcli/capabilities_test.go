@@ -15,7 +15,7 @@ func TestMergeMethods(t *testing.T) {
 		t.Run(method, func(t *testing.T) {
 			t.Parallel()
 			exec := &stubExecutor{}
-			err := newClient(exec).MergePullRequest(context.Background(), "git.example.com/acme/tool", 42, true, method)
+			err := newClient(exec).MergePullRequest(context.Background(), "git.example.com/acme/tool", 42, true, method, "")
 			valid := method == "merge" || method == "squash" || method == "rebase"
 			if !valid {
 				if err == nil || len(exec.calls) != 0 {

@@ -76,7 +76,7 @@ func TestWaitForChecks(t *testing.T) {
 			ctx := context.Background()
 			log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 
-			result, err := waitForChecks(ctx, tc.op, "owner/repo", 1, testConfig(), log, nopProgress{})
+			result, err := waitForChecks(ctx, tc.op, "owner/repo", 1, false, testConfig(), log, nopProgress{})
 
 			if tc.wantErr && err == nil {
 				t.Fatal("expected error, got nil")
@@ -116,7 +116,7 @@ func TestWaitForChecksTerminalFailureConclusionsReturnErrCheckFailed(t *testing.
 			}
 
 			log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-			result, err := waitForChecks(context.Background(), op, "owner/repo", 1, testConfig(), log, nopProgress{})
+			result, err := waitForChecks(context.Background(), op, "owner/repo", 1, false, testConfig(), log, nopProgress{})
 			if !errors.Is(err, ErrCheckFailed) {
 				t.Fatalf("error for %q: got %v, want %v", conclusion, err, ErrCheckFailed)
 			}
@@ -156,7 +156,7 @@ func TestWaitForChecksShowChecksReportsPendingDetail(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	spy := &spyProgress{}
 
-	if _, err := waitForChecks(context.Background(), op, "owner/repo", 1, cfg, log, spy); err != nil {
+	if _, err := waitForChecks(context.Background(), op, "owner/repo", 1, false, cfg, log, spy); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -202,7 +202,7 @@ func TestWaitForChecksShowChecksSanitizesCheckNames(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	spy := &spyProgress{}
 
-	if _, err := waitForChecks(context.Background(), op, "owner/repo", 1, cfg, log, spy); err != nil {
+	if _, err := waitForChecks(context.Background(), op, "owner/repo", 1, false, cfg, log, spy); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -236,7 +236,7 @@ func TestWaitForChecksAdminCollectsFailuresAfterAllChecksSettle(t *testing.T) {
 	cfg.Admin = true
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 
-	result, err := waitForChecks(context.Background(), op, "owner/repo", 1, cfg, log, nopProgress{})
+	result, err := waitForChecks(context.Background(), op, "owner/repo", 1, false, cfg, log, nopProgress{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -270,7 +270,7 @@ func TestWaitForChecksNonAdminFailsFastOnFirstFailure(t *testing.T) {
 	cfg.Admin = false
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 
-	result, err := waitForChecks(context.Background(), op, "owner/repo", 1, cfg, log, nopProgress{})
+	result, err := waitForChecks(context.Background(), op, "owner/repo", 1, false, cfg, log, nopProgress{})
 	if !errors.Is(err, ErrCheckFailed) {
 		t.Fatalf("error: got %v, want %v", err, ErrCheckFailed)
 	}
@@ -311,7 +311,7 @@ func TestWaitForChecksTimeoutReturnsErrCheckTimeout(t *testing.T) {
 
 	cfg := Config{PollInterval: time.Millisecond, CheckTimeout: 5 * time.Millisecond}
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	_, err := waitForChecks(context.Background(), op, "owner/repo", 1, cfg, log, nopProgress{})
+	_, err := waitForChecks(context.Background(), op, "owner/repo", 1, false, cfg, log, nopProgress{})
 	if !errors.Is(err, ErrCheckTimeout) {
 		t.Fatalf("error: got %v, want %v", err, ErrCheckTimeout)
 	}
@@ -334,7 +334,7 @@ func TestWaitForChecksParentCancellationReturnsContextError(t *testing.T) {
 	}
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	_, err := waitForChecks(ctx, op, "owner/repo", 1, testConfig(), log, nopProgress{})
+	_, err := waitForChecks(ctx, op, "owner/repo", 1, false, testConfig(), log, nopProgress{})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("error: got %v, want %v", err, context.Canceled)
 	}
@@ -608,4 +608,147 @@ func TestWaitForBranchUpdate(t *testing.T) {
 			t.Fatalf("error: got %v, want %v", err, ErrBranchUpdateTimeout)
 		}
 	})
+}
+
+// repeatingViewOperator returns the same PR detail on every view.
+type repeatingViewOperator struct {
+	fakeOperator
+	detail githubcli.PRDetail
+	calls  int
+}
+
+func (r *repeatingViewOperator) ViewPullRequest(context.Context, string, int) (githubcli.PRDetail, error) {
+	r.calls++
+	return r.detail, nil
+}
+
+func TestWaitForChecksGracePeriod(t *testing.T) {
+	t.Parallel()
+
+	passing := githubcli.PRDetail{Number: 1, State: "OPEN", HeadRefOid: "sha-new", StatusCheckRollup: []githubcli.StatusCheck{{Name: "ci", Conclusion: "success"}}}
+	failing := githubcli.PRDetail{Number: 1, State: "OPEN", HeadRefOid: "sha-new", StatusCheckRollup: []githubcli.StatusCheck{{Name: "ci", Conclusion: "failure"}}}
+	empty := githubcli.PRDetail{Number: 1, State: "OPEN", HeadRefOid: "sha-new"}
+
+	tests := []struct {
+		name        string
+		detail      githubcli.PRDetail
+		freshCommit bool
+		grace       time.Duration
+		wantErrIs   error
+		wantMinWait time.Duration
+		wantCalls   int
+	}{
+		{name: "passing checks on existing commit are trusted immediately", detail: passing, grace: time.Hour, wantCalls: 1},
+		{name: "passing checks on fresh commit wait for grace", detail: passing, freshCommit: true, grace: 20 * time.Millisecond, wantMinWait: 20 * time.Millisecond},
+		{name: "no checks wait for grace", detail: empty, grace: 20 * time.Millisecond, wantMinWait: 20 * time.Millisecond},
+		{name: "failed check on fresh commit stops immediately", detail: failing, freshCommit: true, grace: time.Hour, wantErrIs: ErrCheckFailed, wantCalls: 1},
+		{name: "no checks within grace times out", detail: empty, grace: time.Hour, wantErrIs: ErrCheckTimeout},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			op := &repeatingViewOperator{detail: tc.detail}
+			cfg := testConfig()
+			cfg.CheckGrace = tc.grace
+			log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+			start := time.Now()
+			result, err := waitForChecks(context.Background(), op, "owner/repo", 1, tc.freshCommit, cfg, log, nopProgress{})
+			elapsed := time.Since(start)
+
+			if tc.wantErrIs != nil {
+				if !errors.Is(err, tc.wantErrIs) {
+					t.Fatalf("error = %v, want %v", err, tc.wantErrIs)
+				}
+			} else {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				if result.HeadSHA != "sha-new" {
+					t.Fatalf("HeadSHA = %q, want sha-new", result.HeadSHA)
+				}
+			}
+			if elapsed < tc.wantMinWait {
+				t.Fatalf("returned after %s, want at least %s", elapsed, tc.wantMinWait)
+			}
+			if tc.wantCalls > 0 && op.calls != tc.wantCalls {
+				t.Fatalf("view calls = %d, want %d", op.calls, tc.wantCalls)
+			}
+		})
+	}
+}
+
+type changingHeadOperator struct {
+	fakeOperator
+	details        []githubcli.PRDetail
+	delay          time.Duration
+	calls          int
+	headObservedAt time.Time
+}
+
+func (o *changingHeadOperator) ViewPullRequest(ctx context.Context, _ string, _ int) (githubcli.PRDetail, error) {
+	if o.calls > 0 && len(o.details) > 1 {
+		timer := time.NewTimer(o.delay)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return githubcli.PRDetail{}, ctx.Err()
+		case <-timer.C:
+		}
+		o.details = o.details[1:]
+		o.headObservedAt = time.Now()
+	}
+	o.calls++
+	return o.details[0], nil
+}
+
+func TestWaitForChecksRestartsGraceOnHeadChange(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		checks      []githubcli.StatusCheck
+		freshCommit bool
+		admin       bool
+		repeated    bool
+	}{
+		{name: "empty checks on changed head"},
+		{name: "empty checks after rebase", freshCommit: true},
+		{name: "passing checks on changed head", checks: []githubcli.StatusCheck{{Name: "ci", Conclusion: "success"}}},
+		{name: "passing checks after rebase", checks: []githubcli.StatusCheck{{Name: "ci", Conclusion: "success"}}, freshCommit: true},
+		{name: "admin failure on changed head", checks: []githubcli.StatusCheck{{Name: "ci", Conclusion: "failure"}}, admin: true},
+		{name: "grace restarts on every head change", repeated: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := testConfig()
+			cfg.CheckGrace = 20 * time.Millisecond
+			cfg.CheckTimeout = time.Second
+			cfg.Admin = tc.admin
+			details := []githubcli.PRDetail{{HeadRefOid: "sha-old", StatusCheckRollup: []githubcli.StatusCheck{{Name: "ci", Status: "in_progress"}}}}
+			if tc.repeated {
+				details = append(details, githubcli.PRDetail{HeadRefOid: "sha-intermediate", StatusCheckRollup: []githubcli.StatusCheck{{Name: "ci", Status: "in_progress"}}})
+			}
+			details = append(details, githubcli.PRDetail{HeadRefOid: "sha-new", StatusCheckRollup: tc.checks})
+			op := &changingHeadOperator{details: details, delay: cfg.CheckGrace + 10*time.Millisecond}
+
+			result, err := waitForChecks(context.Background(), op, "owner/repo", 1, tc.freshCommit, cfg, testLogger(), nopProgress{})
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if result.HeadSHA != "sha-new" {
+				t.Fatalf("HeadSHA = %q, want sha-new", result.HeadSHA)
+			}
+			if elapsed := time.Since(op.headObservedAt); elapsed < cfg.CheckGrace {
+				t.Fatalf("trusted new head after %s, want at least %s", elapsed, cfg.CheckGrace)
+			}
+			if tc.admin && !reflect.DeepEqual(result.Failed, []checkFailure{{Name: "ci", Conclusion: "failure"}}) {
+				t.Fatalf("failed checks = %#v, want admin failure", result.Failed)
+			}
+		})
+	}
 }

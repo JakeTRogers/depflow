@@ -51,10 +51,10 @@ Processes Dependabot PRs in planned order with a live progress display. By defau
 
 - Inspects PR state and branch comparison
 - Posts a `@dependabot rebase` comment and polls until the branch is updated if it is behind base
-- Waits for CI checks to pass by polling the status check rollup
-- Re-checks mergeability and branch state before merge
+- Waits for CI checks to pass by polling the status check rollup. GitHub registers checks for a new commit asynchronously, so a PR that reports no checks is given a 30-second grace period from when its head commit is first observed before depflow treats it as having no CI. The grace period restarts whenever the observed head changes; after a rebase or an observed head change, passing checks are not trusted until it has elapsed
+- Re-checks mergeability and branch state before merge, and stops if the head commit changed after its checks passed
 - Submits an approval review immediately before merge
-- Merges the PR using the selected method and deletes the head branch
+- Merges the PR using the selected method, pinned to the verified head commit (`gh pr merge --match-head-commit`), and deletes the head branch
 - Waits for post-merge CI for the merged commit on the base branch before proceeding to the next PR
 - Stops on first failure (no retry or skip mode) and exits non-zero if any PR fails to process
 

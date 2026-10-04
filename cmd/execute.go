@@ -35,6 +35,10 @@ type executeOptions struct {
 
 const minPollInterval = 5 * time.Second
 
+// checkRegistrationGrace is how long execute gives GitHub to register checks for a PR that
+// reports none, or whose branch was just updated, before trusting the reported check state.
+const checkRegistrationGrace = 30 * time.Second
+
 func newExecuteCommand(deps commandDeps, opts *commandOptions) *cobra.Command {
 	execOpts := &executeOptions{}
 
@@ -191,6 +195,7 @@ func runPlan(cmd *cobra.Command, deps commandDeps, opts *commandOptions, execOpt
 		Admin:            execOpts.admin,
 		PollInterval:     execOpts.pollInterval,
 		CheckTimeout:     execOpts.checkTimeout,
+		CheckGrace:       checkRegistrationGrace,
 		PostMergeDelay:   execOpts.postMergeDelay,
 		PostMergeTimeout: execOpts.postMergeTimeout,
 		ShowChecks:       execOpts.showChecks,

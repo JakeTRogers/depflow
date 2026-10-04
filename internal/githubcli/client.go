@@ -74,7 +74,7 @@ type Client interface {
 	ListOpenPullRequests(ctx context.Context, repo string, limit int) ([]PullRequest, error)
 	ViewPullRequest(ctx context.Context, repo string, number int) (PRDetail, error)
 	ApprovePullRequest(ctx context.Context, repo string, number int) error
-	MergePullRequest(ctx context.Context, repo string, number int, admin bool, method string) error
+	MergePullRequest(ctx context.Context, repo string, number int, admin bool, method, headSHA string) error
 	ReadMergeCapabilities(ctx context.Context, repo string) (MergeCapabilities, error)
 	CheckMergeAllowed(ctx context.Context, repo string, number int, method string) error
 	CommentOnPR(ctx context.Context, repo string, number int, body string) error

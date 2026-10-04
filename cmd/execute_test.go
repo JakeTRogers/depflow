@@ -63,7 +63,7 @@ func (f *fakeExecuteOperator) ViewPullRequest(_ context.Context, repo string, nu
 	}, nil
 }
 
-func (f *fakeExecuteOperator) MergePullRequest(_ context.Context, repo string, _ int, admin bool, method string) error {
+func (f *fakeExecuteOperator) MergePullRequest(_ context.Context, repo string, _ int, admin bool, method, _ string) error {
 	f.mergedMethods = append(f.mergedMethods, method)
 	f.mergedRepos = append(f.mergedRepos, repo)
 	f.mergedAdmins = append(f.mergedAdmins, admin)
