@@ -17,7 +17,7 @@ import (
 
 const (
 	noPickLinesMessage     = "Nothing to do: plan has no pick lines."
-	noOpenPickedPRsMessage = "Nothing to do: none of the picked PRs are open Dependabot PRs."
+	noOpenPickedPRsMessage = "Nothing to do: none of the picked PRs can be processed."
 )
 
 // planFileConflictingFlags shape which PRs a generated plan contains, so they have no meaning
@@ -98,10 +98,14 @@ type bucketDrift struct {
 }
 
 type planFileResolution struct {
-	plan     planner.Plan
-	picked   int
-	dropped  []int
-	drifted  []bucketDrift
+	plan    planner.Plan
+	picked  int
+	dropped []int
+	drifted []bucketDrift
+	// blocked lists picks that became major updates after the plan was written. They are not
+	// processed unless the file records them as [major], so a new major bump is never merged on
+	// the strength of an approval given to a smaller one.
+	blocked  []bucketDrift
 	unlisted int
 }
 
@@ -133,12 +137,20 @@ func resolvePlanFile(file planfile.File, repo string, prs []dependabot.PR) (plan
 		recordedBuckets[entry.Number] = entry.Bucket
 	}
 
-	res.plan = planner.BuildOrdered(selected, order)
-	for _, item := range res.plan.Items {
+	ordered := planner.BuildOrdered(selected, order)
+	for _, item := range ordered.Items {
 		was := recordedBuckets[item.PR.Number]
-		if was != "" && !strings.EqualFold(was, string(item.Bucket)) {
-			res.drifted = append(res.drifted, bucketDrift{number: item.PR.Number, was: was, now: item.Bucket})
+		if was == "" || strings.EqualFold(was, string(item.Bucket)) {
+			res.plan.Items = append(res.plan.Items, item)
+			continue
 		}
+		drift := bucketDrift{number: item.PR.Number, was: was, now: item.Bucket}
+		if item.Bucket == planner.BucketMajor {
+			res.blocked = append(res.blocked, drift)
+			continue
+		}
+		res.drifted = append(res.drifted, drift)
+		res.plan.Items = append(res.plan.Items, item)
 	}
 
 	listed := make(map[int]bool, len(file.Entries))
@@ -180,6 +192,9 @@ func writePlanFileNotices(w io.Writer, res planFileResolution, reportUnlisted bo
 	var builder strings.Builder
 	if len(res.dropped) > 0 {
 		fmt.Fprintf(&builder, "Not processed (not an open Dependabot PR): %s\n", formatPRNumbers(res.dropped))
+	}
+	for _, drift := range res.blocked {
+		fmt.Fprintf(&builder, "Not processed: #%d is now [major], was [%s] when planned; change its bucket to [major] in the plan file to include it\n", drift.number, sanitize(drift.was))
 	}
 	for _, drift := range res.drifted {
 		fmt.Fprintf(&builder, "Warning: #%d is now [%s], was [%s] when planned\n", drift.number, drift.now, sanitize(drift.was))

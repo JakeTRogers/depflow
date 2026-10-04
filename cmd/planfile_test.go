@@ -317,6 +317,66 @@ func TestExecutePlanFileReportsDroppedAndDriftedPRs(t *testing.T) {
 	}
 }
 
+func TestExecutePlanFileBlocksPicksThatBecameMajor(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		lines      []string
+		wantStdout []string
+		wantAbsent []string
+	}{
+		{
+			name:  "drift into major is not processed",
+			lines: []string{"repo owner/repo", "pick #12 [minor] react", "pick #10 [patch] lodash"},
+			wantStdout: []string{
+				"Not processed: #12 is now [major], was [minor] when planned; change its bucket to [major] in the plan file to include it\n",
+				"Dry run: 1 PR(s) would be processed in this order:",
+				"1. #10 [patch]",
+			},
+			wantAbsent: []string{"1. #12", "2. #12", "Warning: #12"},
+		},
+		{
+			name:       "recording the major bucket re-confirms the pick",
+			lines:      []string{"repo owner/repo", "pick #12 [Major] react", "pick #10 [patch] lodash"},
+			wantStdout: []string{"Dry run: 2 PR(s) would be processed in this order:", "1. #12 [major]"},
+			wantAbsent: []string{"Not processed", "Warning"},
+		},
+		{
+			name:       "every pick blocked",
+			lines:      []string{"repo owner/repo", "pick #12 [patch] react"},
+			wantStdout: []string{"Not processed: #12 is now [major]", noOpenPickedPRsMessage},
+			wantAbsent: []string{"Dry run:"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			operator := &fakeExecuteOperator{}
+			path := writeTestPlan(t, test.lines...)
+			run := runWithDeps(t, commandDeps{lister: planFileFixture(), operator: operator}, "", "--repo", "owner/repo", "execute", "--plan", path, "--dry-run")
+			if run.err != nil {
+				t.Fatalf("Execute() error = %v", run.err)
+			}
+			for _, fragment := range test.wantStdout {
+				if !strings.Contains(run.stdout, fragment) {
+					t.Fatalf("stdout missing %q:\n%s", fragment, run.stdout)
+				}
+			}
+			for _, fragment := range test.wantAbsent {
+				if strings.Contains(run.stdout, fragment) {
+					t.Fatalf("stdout should not contain %q:\n%s", fragment, run.stdout)
+				}
+			}
+			if len(operator.approvedRepos) != 0 || len(operator.mergedRepos) != 0 {
+				t.Fatalf("dry run approved %v, merged %v", operator.approvedRepos, operator.mergedRepos)
+			}
+		})
+	}
+}
+
 func TestExecutePlanFileNothingToDo(t *testing.T) {
 	t.Parallel()
 

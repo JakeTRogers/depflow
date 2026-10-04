@@ -183,11 +183,12 @@ pick #22 [minor] Bump github.com/spf13/cobra from 1.9.0 to 1.10.2
 skip #40 [major] Bump foo from 1.4.0 to 2.0.0  # change-kind "major" not in --change-kind allow-list
 ```
 
-- PRs run in the order of their `pick` lines. The command and PR number control execution. The optional bucket is parsed as metadata for bucket-drift warnings, while the title is informational; changing the bucket does not change execution order.
+- PRs run in the order of their `pick` lines. The command and PR number control execution. The optional bucket records what the PR was when planned and is checked for drift (see below), while the title is informational; changing the bucket does not change execution order.
 - PRs held back only by the default `--change-kind` and draft filters are listed as `skip` lines so you can include them. PRs removed by filters you pass explicitly (for example `--exclude-ecosystem npm-and-yarn` or `--change-kind patch`) are left out of the file.
 - Before anything is changed, every picked PR is checked against the currently open Dependabot PRs. Picks that aren't open Dependabot PRs (merged since the plan was written, or never from Dependabot) are reported under `Not processed` and skipped, so a stale or hand-edited plan can never merge anything else.
 - The `repo` line must match the target repository (`--repo`, or the one `gh` infers).
-- When running a saved plan, depflow warns if a PR's bucket has changed since the plan was written (for example, Dependabot moved it to a new major version) and reports how many open Dependabot PRs the file doesn't list. Those PRs are left alone.
+- When running a plan, depflow warns if a PR's bucket has changed since the plan was written. A pick that has become `[major]` (for example, Dependabot moved it to a new major version) is not processed and is reported under `Not processed`; change its bucket to `[major]` in the plan file to include it anyway. A `pick` line with no bucket is not checked.
+- When running a saved plan, depflow also reports how many open Dependabot PRs the file doesn't list. Those PRs are left alone.
 - The editor is `$VISUAL`, then `$EDITOR`, then `vi` (`notepad` on Windows). Exiting the editor with an error aborts. If the edited plan can't be parsed, depflow keeps the file and prints its path so you can fix it and rerun with `--plan`.
 - `--edit` needs an interactive terminal. In scripts, use `plan -o` and `execute --plan`.
 
