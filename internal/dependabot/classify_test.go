@@ -624,3 +624,77 @@ func TestClassifyGroupedBodyMajorDetectionWithRequirementOperators(t *testing.T)
 		t.Fatal("ContainsMajorUpdate = false, want true")
 	}
 }
+
+func TestClassifyCommitPrefixVariants(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		title          string
+		headRef        string
+		body           string
+		wantDependency string
+		wantGrouped    bool
+		wantKind       ChangeKind
+		wantDevTooling bool
+	}{
+		{
+			name:           "repeated scope single dependency with directory",
+			title:          "deps(rust)(deps): bump aes from 0.8.4 to 0.9.3 in /rust",
+			headRef:        "dependabot/cargo/rust/aes-0.9.3",
+			wantDependency: "aes",
+			wantKind:       ChangeMinor,
+		},
+		{
+			name:           "repeated scope dev dependency keyword",
+			title:          "deps(frontend)(deps-dev): bump eslint from 9.39.2 to 10.11.0 in /frontend",
+			headRef:        "dependabot/npm_and_yarn/frontend/eslint-10.11.0",
+			wantDependency: "eslint",
+			wantKind:       ChangeMajor,
+			wantDevTooling: true,
+		},
+		{
+			name:           "repeated scope grouped summary with body major",
+			title:          "deps(rust)(deps): bump the rust-minor-patch group in /rust with 2 updates",
+			headRef:        "dependabot/cargo/rust/rust-minor-patch-17d15c0d11",
+			body:           "Updates `tokio` from 1.49.0 to 2.0.0",
+			wantDependency: "rust minor patch group",
+			wantGrouped:    true,
+			wantKind:       ChangeMajor,
+		},
+		{
+			name:           "repeated scope requirement update",
+			title:          "deps(python)(deps): update redis requirement from >=7.4.0 to >=8.1.0 in /agents/qa_agent",
+			headRef:        "dependabot/pip/agents/qa_agent/redis-gte-8.1.0",
+			wantDependency: "redis",
+			wantKind:       ChangeMajor,
+		},
+		{
+			name:           "capitalized type",
+			title:          "Chore(deps): bump cobra from 1.9.0 to 1.10.2",
+			headRef:        "dependabot/go_modules/github.com/spf13/cobra-1.10.2",
+			wantDependency: "cobra",
+			wantKind:       ChangeMinor,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			classification := classify(test.title, test.body, test.headRef, []string{"dependencies"})
+			if classification.DependencyName != test.wantDependency {
+				t.Fatalf("DependencyName = %q, want %q", classification.DependencyName, test.wantDependency)
+			}
+			if classification.Grouped != test.wantGrouped {
+				t.Fatalf("Grouped = %v, want %v", classification.Grouped, test.wantGrouped)
+			}
+			if got := classification.EffectiveChangeKind(); got != test.wantKind {
+				t.Fatalf("EffectiveChangeKind() = %q, want %q", got, test.wantKind)
+			}
+			if classification.DeveloperTooling != test.wantDevTooling {
+				t.Fatalf("DeveloperTooling = %v, want %v", classification.DeveloperTooling, test.wantDevTooling)
+			}
+		})
+	}
+}

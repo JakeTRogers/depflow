@@ -47,7 +47,7 @@ var (
 	requirementTitlePattern       = regexp.MustCompile(`(?i)^update\s+(.+?)\s+requirement\s+from\b`)
 	groupedDependencyTitlePattern = regexp.MustCompile(`(?i)^bump\s+(.+?)(?:\s+from\s+[^\s]+\s+to\s+[^\s]+)?\s+in\s+(?:the\s+)?(.+?)\s+group\b`)
 	groupedSummaryTitlePattern    = regexp.MustCompile(`(?i)^bump\s+(?:the\s+)?(.+?)\s+group\b`)
-	conventionalCommitPattern     = regexp.MustCompile(`^[a-z]+(?:\([^)]+\))?!?:\s*`)
+	conventionalCommitPattern     = regexp.MustCompile(`(?i)^[a-z][a-z0-9-]*(?:\([^)]*\))*!?:\s*`) // scopes may repeat: "deps(rust)(deps): "
 	versionPattern                = regexp.MustCompile(`(?i)^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?`)
 	headVersionPattern            = regexp.MustCompile(`-(v?\d+(?:\.\d+){0,2}[^/]*)$`)
 
