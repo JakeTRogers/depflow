@@ -40,8 +40,11 @@ type Classification struct {
 }
 
 var (
-	fromToPattern                 = regexp.MustCompile(`(?i)\bfrom\s+([^\s]+)\s+to\s+([^\s]+)\b`)
+	// Requirement updates prefix versions with operators, e.g. "from >=7.4 to >=8.1" or
+	// Bundler's "from ~> 6.1 to ~> 7.0", so an operator and the space after it belong to the version.
+	fromToPattern                 = regexp.MustCompile(`(?i)\bfrom\s+((?:[<>=~^!]+\s*)?[^\s]+)\s+to\s+((?:[<>=~^!]+\s*)?[^\s]+)\b`)
 	bumpTitlePattern              = regexp.MustCompile(`(?i)^bump\s+(.+?)\s+from\b`)
+	requirementTitlePattern       = regexp.MustCompile(`(?i)^update\s+(.+?)\s+requirement\s+from\b`)
 	groupedDependencyTitlePattern = regexp.MustCompile(`(?i)^bump\s+(.+?)(?:\s+from\s+[^\s]+\s+to\s+[^\s]+)?\s+in\s+(?:the\s+)?(.+?)\s+group\b`)
 	groupedSummaryTitlePattern    = regexp.MustCompile(`(?i)^bump\s+(?:the\s+)?(.+?)\s+group\b`)
 	conventionalCommitPattern     = regexp.MustCompile(`^[a-z]+(?:\([^)]+\))?!?:\s*`)
@@ -211,9 +214,8 @@ func inferDependencyName(title, headRef, ecosystem string) string {
 		return match.displayName()
 	}
 
-	normalizedTitle := stripConventionalCommitPrefix(title)
-	if matches := bumpTitlePattern.FindStringSubmatch(normalizedTitle); len(matches) == 2 {
-		return strings.TrimSpace(matches[1])
+	if name, ok := singleDependencyName(title); ok {
+		return name
 	}
 
 	trimmedHeadRef := strings.TrimSpace(headRef)
@@ -229,6 +231,18 @@ func inferDependencyName(title, headRef, ecosystem string) string {
 	}
 
 	return strings.TrimSpace(headVersionPattern.ReplaceAllString(remainder, ""))
+}
+
+// singleDependencyName extracts the dependency from "bump X from ..." and
+// "update X requirement from ..." titles.
+func singleDependencyName(title string) (string, bool) {
+	normalizedTitle := stripConventionalCommitPrefix(title)
+	for _, pattern := range []*regexp.Regexp{bumpTitlePattern, requirementTitlePattern} {
+		if matches := pattern.FindStringSubmatch(normalizedTitle); len(matches) == 2 {
+			return strings.TrimSpace(matches[1]), true
+		}
+	}
+	return "", false
 }
 
 func inferVersionRange(title string) (string, string) {
@@ -284,7 +298,8 @@ func stripConventionalCommitPrefix(title string) string {
 	}
 
 	remainder := strings.TrimSpace(strings.TrimPrefix(trimmedTitle, prefix))
-	if !strings.HasPrefix(strings.ToLower(remainder), "bump ") {
+	lowerRemainder := strings.ToLower(remainder)
+	if !strings.HasPrefix(lowerRemainder, "bump ") && !strings.HasPrefix(lowerRemainder, "update ") {
 		return trimmedTitle
 	}
 
@@ -311,8 +326,8 @@ func dependencySignalText(title string) string {
 	if match, ok := parseGroupedTitle(title); ok {
 		return strings.ToLower(match.leadDependency)
 	}
-	if matches := bumpTitlePattern.FindStringSubmatch(stripConventionalCommitPrefix(title)); len(matches) == 2 {
-		return strings.ToLower(strings.TrimSpace(matches[1]))
+	if name, ok := singleDependencyName(title); ok {
+		return strings.ToLower(name)
 	}
 	return ""
 }
@@ -372,8 +387,10 @@ func containsGroupedMajorUpdate(body string) bool {
 	return false
 }
 
+// parseSemanticVersion parses the leading version of value, ignoring requirement operators such as
+// ">=", "~=", "^", or "~>".
 func parseSemanticVersion(value string) (semanticVersion, bool) {
-	matches := versionPattern.FindStringSubmatch(strings.TrimSpace(value))
+	matches := versionPattern.FindStringSubmatch(strings.TrimLeft(strings.TrimSpace(value), "<>=~^! "))
 	if len(matches) == 0 {
 		return semanticVersion{}, false
 	}

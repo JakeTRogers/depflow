@@ -532,3 +532,95 @@ func TestEffectiveChangeKind(t *testing.T) {
 		})
 	}
 }
+
+func TestClassifyRequirementUpdateTitles(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		title          string
+		headRef        string
+		wantDependency string
+		wantFrom       string
+		wantTo         string
+		wantKind       ChangeKind
+		wantDevTooling bool
+	}{
+		{
+			name:           "pip lower bound major",
+			title:          "Update redis requirement from >=7.4.0 to >=8.1.0",
+			headRef:        "dependabot/pip/redis-gte-8.1.0",
+			wantDependency: "redis",
+			wantFrom:       ">=7.4.0",
+			wantTo:         ">=8.1.0",
+			wantKind:       ChangeMajor,
+		},
+		{
+			name:           "conventional commit prefix and directory",
+			title:          "build(deps-dev): update mypy requirement from >=1.11.0 to >=2.4.0 in /agents",
+			headRef:        "dependabot/pip/agents/mypy-gte-2.4.0",
+			wantDependency: "mypy",
+			wantFrom:       ">=1.11.0",
+			wantTo:         ">=2.4.0",
+			wantKind:       ChangeMajor,
+			wantDevTooling: true,
+		},
+		{
+			name:           "compatible release minor",
+			title:          "Update requests requirement from ~=2.31 to ~=2.32",
+			headRef:        "dependabot/pip/requests-tw-2.32",
+			wantDependency: "requests",
+			wantFrom:       "~=2.31",
+			wantTo:         "~=2.32",
+			wantKind:       ChangeMinor,
+		},
+		{
+			name:           "bundler pessimistic operator with space",
+			title:          "Update rails requirement from ~> 6.1 to ~> 7.0",
+			headRef:        "dependabot/bundler/rails-tw-7.0",
+			wantDependency: "rails",
+			wantFrom:       "~> 6.1",
+			wantTo:         "~> 7.0",
+			wantKind:       ChangeMajor,
+		},
+		{
+			name:           "npm caret range patch",
+			title:          "Bump lodash from ^4.17.20 to ^4.17.21",
+			headRef:        "dependabot/npm_and_yarn/lodash-4.17.21",
+			wantDependency: "lodash",
+			wantFrom:       "^4.17.20",
+			wantTo:         "^4.17.21",
+			wantKind:       ChangePatch,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			classification := classify(test.title, "", test.headRef, []string{"dependencies"})
+			if classification.DependencyName != test.wantDependency {
+				t.Fatalf("DependencyName = %q, want %q", classification.DependencyName, test.wantDependency)
+			}
+			if classification.PreviousVersion != test.wantFrom || classification.NextVersion != test.wantTo {
+				t.Fatalf("versions = %q -> %q, want %q -> %q", classification.PreviousVersion, classification.NextVersion, test.wantFrom, test.wantTo)
+			}
+			if classification.ChangeKind != test.wantKind {
+				t.Fatalf("ChangeKind = %q, want %q", classification.ChangeKind, test.wantKind)
+			}
+			if classification.DeveloperTooling != test.wantDevTooling {
+				t.Fatalf("DeveloperTooling = %v, want %v", classification.DeveloperTooling, test.wantDevTooling)
+			}
+		})
+	}
+}
+
+func TestClassifyGroupedBodyMajorDetectionWithRequirementOperators(t *testing.T) {
+	t.Parallel()
+
+	body := "Updates the requirements on [redis](https://github.com/redis/redis-py) to permit the latest version.\nUpdates `redis` from >=7.4.0 to >=8.1.0"
+	classification := classify("Bump the python group with 1 update", body, "dependabot/pip/python-abc123", []string{"dependencies"})
+	if !classification.ContainsMajorUpdate {
+		t.Fatal("ContainsMajorUpdate = false, want true")
+	}
+}
