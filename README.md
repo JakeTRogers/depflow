@@ -55,7 +55,7 @@ Processes Dependabot PRs in planned order with a live progress display. By defau
 - Re-checks mergeability and branch state before merge, and stops if the head commit changed after its checks passed
 - Submits an approval review immediately before merge
 - Merges the PR using the selected method, pinned to the verified head commit (`gh pr merge --match-head-commit`), and deletes the head branch
-- Waits for post-merge CI for the merged commit on the base branch before proceeding to the next PR
+- Waits for post-merge CI for the merged commit on the base branch before proceeding to the next PR. GitHub-managed `dynamic` runs, such as Dependabot's own update jobs, are not treated as CI. If the merge commit starts no runs within 2 minutes (for example, because path filters skipped every workflow), depflow logs a warning and continues unless `--require-post-merge-ci` is set. This grace period applies even when recent run history contains no push-triggered runs, since that does not prove push workflows are absent
 - Stops on first failure (no retry or skip mode) and exits non-zero if any PR fails to process
 
 Without `--admin`, any failed pre-merge check stops execution. With `--admin`, depflow waits for all pre-merge checks to reach a terminal state, logs a summary warning plus one warning per failed check, then continues with approval and an admin merge. The flag is forwarded as `gh pr merge --admin`, which bypasses branch protection rules. Because GitHub's status-check metadata does not distinguish policy gates from ordinary test failures, `--admin` bypasses all failed pre-merge checks. These admin-bypass warnings are emitted at warn level, so they remain visible even without `-v`.
@@ -76,6 +76,7 @@ If the process receives `SIGINT` or `SIGTERM`, depflow cancels the active execut
 - `--check-timeout` — maximum wait for CI checks per PR (default: 30m, must be greater than `--poll-interval`)
 - `--post-merge-delay` — delay before checking post-merge CI (default: 10s)
 - `--post-merge-timeout` — maximum wait for post-merge CI (default: 30m, must be greater than `--poll-interval`)
+- `--require-post-merge-ci` — fail when a merge commit starts no workflow runs, instead of continuing with a warning
 - `--show-checks` — show per-check pass/pending/fail detail on the progress line while waiting for CI, post-merge CI, and branch updates
 - `--show-timing` — show elapsed wait time on the progress line and per-PR duration in the execution summary
 

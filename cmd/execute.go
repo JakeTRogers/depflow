@@ -27,6 +27,7 @@ type executeOptions struct {
 	checkTimeout     time.Duration
 	postMergeDelay   time.Duration
 	postMergeTimeout time.Duration
+	requirePostMerge bool
 	showChecks       bool
 	showTiming       bool
 	edit             bool
@@ -38,6 +39,10 @@ const minPollInterval = 5 * time.Second
 // checkRegistrationGrace is how long execute gives GitHub to register checks for a PR that
 // reports none, or whose branch was just updated, before trusting the reported check state.
 const checkRegistrationGrace = 30 * time.Second
+
+// postMergeRunGrace is how long execute waits for a merge commit to start any workflow run before
+// continuing with a warning; --require-post-merge-ci turns that into a failure instead.
+const postMergeRunGrace = 2 * time.Minute
 
 func newExecuteCommand(deps commandDeps, opts *commandOptions) *cobra.Command {
 	execOpts := &executeOptions{}
@@ -143,6 +148,7 @@ func newExecuteCommand(deps commandDeps, opts *commandOptions) *cobra.Command {
 	cmd.Flags().DurationVar(&execOpts.checkTimeout, "check-timeout", 30*time.Minute, "maximum wait for CI checks per PR")
 	cmd.Flags().DurationVar(&execOpts.postMergeDelay, "post-merge-delay", 10*time.Second, "delay before checking post-merge CI")
 	cmd.Flags().DurationVar(&execOpts.postMergeTimeout, "post-merge-timeout", 30*time.Minute, "maximum wait for post-merge CI")
+	cmd.Flags().BoolVar(&execOpts.requirePostMerge, "require-post-merge-ci", false, "fail if a merge commit starts no workflow runs instead of continuing with a warning")
 	cmd.Flags().BoolVar(&execOpts.showChecks, "show-checks", false, "show per-check pass/pending/fail detail while waiting")
 	cmd.Flags().BoolVar(&execOpts.showTiming, "show-timing", false, "show elapsed wait time and per-PR duration")
 
@@ -193,15 +199,17 @@ func runPlan(cmd *cobra.Command, deps commandDeps, opts *commandOptions, execOpt
 	}
 
 	cfg := executor.Config{
-		MergeMethod:      method.Value,
-		Admin:            execOpts.admin,
-		PollInterval:     execOpts.pollInterval,
-		CheckTimeout:     execOpts.checkTimeout,
-		CheckGrace:       checkRegistrationGrace,
-		PostMergeDelay:   execOpts.postMergeDelay,
-		PostMergeTimeout: execOpts.postMergeTimeout,
-		ShowChecks:       execOpts.showChecks,
-		ShowTiming:       execOpts.showTiming,
+		MergeMethod:        method.Value,
+		Admin:              execOpts.admin,
+		PollInterval:       execOpts.pollInterval,
+		CheckTimeout:       execOpts.checkTimeout,
+		CheckGrace:         checkRegistrationGrace,
+		PostMergeDelay:     execOpts.postMergeDelay,
+		PostMergeTimeout:   execOpts.postMergeTimeout,
+		PostMergeGrace:     postMergeRunGrace,
+		RequirePostMergeCI: execOpts.requirePostMerge,
+		ShowChecks:         execOpts.showChecks,
+		ShowTiming:         execOpts.showTiming,
 	}
 
 	ui := progress.NewTracker(cmd.ErrOrStderr(), len(plan.Items))

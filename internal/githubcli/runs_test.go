@@ -40,7 +40,7 @@ func TestListWorkflowRuns(t *testing.T) {
 		"--branch",
 		"dependabot/go/go-1.22",
 		"--json",
-		"name,status,conclusion,headSha,startedAt",
+		"name,status,conclusion,headSha,event,startedAt",
 		"--repo",
 		"owner/repo",
 	}

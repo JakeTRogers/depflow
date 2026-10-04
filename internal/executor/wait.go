@@ -194,7 +194,20 @@ func waitForChecks(ctx context.Context, op Operator, repo string, number int, fr
 	}
 }
 
-// waitForPostMergeCI polls ListWorkflowRuns on the base branch until all runs for the merge commit complete.
+// isManagedRun reports whether a workflow run is GitHub-managed rather than the repository's own
+// CI. Dynamic runs include Dependabot's update jobs, which a merge to the base branch triggers
+// and which can fail for reasons unrelated to the merged change.
+func isManagedRun(run githubcli.WorkflowRun) bool {
+	return strings.EqualFold(run.Event, "dynamic")
+}
+
+// waitForPostMergeCI polls ListWorkflowRuns on the base branch until all runs for the merge commit
+// complete. GitHub-managed dynamic runs are ignored.
+//
+// Unless cfg.RequirePostMergeCI is set, a merge commit that starts no runs is not treated as a
+// failure: the wait ends with a warning after cfg.PostMergeGrace (or the timeout, if sooner),
+// since path filters can legitimately skip every workflow. Recent run history cannot establish
+// that the branch has no push-triggered workflows.
 func waitForPostMergeCI(ctx context.Context, op Operator, repo string, branch string, mergeSHA string, cfg Config, log *slog.Logger, progress Progress) error {
 	start := time.Now()
 	progress.SetStatus(waitStatus(fmt.Sprintf("Waiting for post-merge CI on %s", branch), cfg, start, ""))
@@ -207,6 +220,18 @@ func waitForPostMergeCI(ctx context.Context, op Operator, repo string, branch st
 	stopTimer(timer)
 	defer stopTimer(timer)
 
+	sawRun := false
+	noRunsStarted := func() error {
+		log.Warn("no post-merge workflow runs started for merge commit; continuing", "branch", branch, "merge", mergeSHA, "waited", time.Since(start).Round(time.Second))
+		return nil
+	}
+	timeout := func() error {
+		if !sawRun && !cfg.RequirePostMergeCI {
+			return noRunsStarted()
+		}
+		return fmt.Errorf("post-merge CI timeout for branch %s merge %s: %w", branch, mergeSHA, ErrPostMergeTimeout)
+	}
+
 	for {
 		runs, err := op.ListWorkflowRuns(ctx, repo, branch)
 		if err != nil {
@@ -214,7 +239,7 @@ func waitForPostMergeCI(ctx context.Context, op Operator, repo string, branch st
 				return parentErr
 			}
 			if ctx.Err() != nil {
-				return fmt.Errorf("post-merge CI timeout for branch %s merge %s: %w", branch, mergeSHA, ErrPostMergeTimeout)
+				return timeout()
 			}
 			return fmt.Errorf("listing workflow runs for branch %s: %w", branch, err)
 		}
@@ -225,12 +250,18 @@ func waitForPostMergeCI(ctx context.Context, op Operator, repo string, branch st
 			conclusion string
 		}
 		for _, r := range runs {
-			if r.HeadSHA == mergeSHA {
+			if r.HeadSHA == mergeSHA && !isManagedRun(r) {
 				relevant = append(relevant, struct {
 					name       string
 					status     string
 					conclusion string
 				}{terminal.Sanitize(r.Name), strings.ToLower(r.Status), strings.ToLower(r.Conclusion)})
+			}
+		}
+
+		if len(relevant) == 0 && !sawRun && !cfg.RequirePostMergeCI {
+			if time.Since(start) >= cfg.PostMergeGrace {
+				return noRunsStarted()
 			}
 		}
 
@@ -242,11 +273,12 @@ func waitForPostMergeCI(ctx context.Context, op Operator, repo string, branch st
 			case <-parentCtx.Done():
 				return parentCtx.Err()
 			case <-ctx.Done():
-				return fmt.Errorf("post-merge CI timeout for branch %s merge %s: %w", branch, mergeSHA, ErrPostMergeTimeout)
+				return timeout()
 			case <-timer.C:
 				continue
 			}
 		}
+		sawRun = true
 
 		for _, r := range relevant {
 			if r.status == "completed" && isTerminalFailureConclusion(r.conclusion) {
@@ -286,7 +318,7 @@ func waitForPostMergeCI(ctx context.Context, op Operator, repo string, branch st
 		case <-parentCtx.Done():
 			return parentCtx.Err()
 		case <-ctx.Done():
-			return fmt.Errorf("post-merge CI timeout for branch %s merge %s: %w", branch, mergeSHA, ErrPostMergeTimeout)
+			return timeout()
 		case <-timer.C:
 		}
 	}

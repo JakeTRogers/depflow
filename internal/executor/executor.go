@@ -59,8 +59,12 @@ type Config struct {
 	CheckGrace       time.Duration
 	PostMergeDelay   time.Duration
 	PostMergeTimeout time.Duration
-	ShowChecks       bool
-	ShowTiming       bool
+	// PostMergeGrace is how long to wait for a merge commit to start any workflow run before
+	// continuing with a warning, unless RequirePostMergeCI is set.
+	PostMergeGrace     time.Duration
+	RequirePostMergeCI bool
+	ShowChecks         bool
+	ShowTiming         bool
 }
 
 type prStatus string

@@ -3,6 +3,7 @@ package executor
 import (
 	"context"
 	"errors"
+	"io"
 	"log/slog"
 	"os"
 	"reflect"
@@ -390,14 +391,14 @@ func TestWaitForPostMergeCI(t *testing.T) {
 				commentErrors: map[int]error{},
 				runResults: map[string][][]githubcli.WorkflowRun{
 					"main": {
-						{{Name: "CI", Status: "completed", Conclusion: "success", HeadSHA: "other-sha", StartedAt: time.Now().Format(time.RFC3339)}},
-						{{Name: "CI", Status: "completed", Conclusion: "success", HeadSHA: "abc123", StartedAt: time.Now().Format(time.RFC3339)}},
+						{{Name: "CI", Event: "push", Status: "completed", Conclusion: "success", HeadSHA: "other-sha", StartedAt: time.Now().Format(time.RFC3339)}},
+						{{Name: "CI", Event: "push", Status: "completed", Conclusion: "success", HeadSHA: "abc123", StartedAt: time.Now().Format(time.RFC3339)}},
 					},
 				},
 			},
 		},
 		{
-			name: "times out when matching SHA never appears",
+			name: "times out when matching SHA never appears and post-merge CI is required",
 			op: &fakeOperator{
 				viewResults:   map[int][]githubcli.PRDetail{},
 				viewErrors:    map[int]error{},
@@ -407,7 +408,7 @@ func TestWaitForPostMergeCI(t *testing.T) {
 					"main": func() [][]githubcli.WorkflowRun {
 						results := make([][]githubcli.WorkflowRun, 20)
 						for i := range results {
-							results[i] = []githubcli.WorkflowRun{{Name: "CI", Status: "completed", Conclusion: "success", HeadSHA: "other-sha", StartedAt: time.Now().Format(time.RFC3339)}}
+							results[i] = []githubcli.WorkflowRun{{Name: "CI", Event: "push", Status: "completed", Conclusion: "success", HeadSHA: "other-sha", StartedAt: time.Now().Format(time.RFC3339)}}
 						}
 						return results
 					}(),
@@ -427,7 +428,7 @@ func TestWaitForPostMergeCI(t *testing.T) {
 
 			cfg := testConfig()
 			if tc.wantErrIs == ErrPostMergeTimeout {
-				cfg = Config{PollInterval: time.Millisecond, PostMergeTimeout: 5 * time.Millisecond}
+				cfg = Config{PollInterval: time.Millisecond, PostMergeTimeout: 5 * time.Millisecond, RequirePostMergeCI: true}
 			}
 			err := waitForPostMergeCI(ctx, tc.op, "owner/repo", "main", "abc123", cfg, log, nopProgress{})
 
@@ -750,5 +751,117 @@ func TestWaitForChecksRestartsGraceOnHeadChange(t *testing.T) {
 				t.Fatalf("failed checks = %#v, want admin failure", result.Failed)
 			}
 		})
+	}
+}
+
+// repeatingRunsOperator returns the same workflow runs on every listing.
+type repeatingRunsOperator struct {
+	fakeOperator
+	runs  []githubcli.WorkflowRun
+	calls int
+}
+
+func (r *repeatingRunsOperator) ListWorkflowRuns(context.Context, string, string) ([]githubcli.WorkflowRun, error) {
+	r.calls++
+	return r.runs, nil
+}
+
+func TestWaitForPostMergeCIWithoutRunsForMergeCommit(t *testing.T) {
+	t.Parallel()
+
+	pushHistory := githubcli.WorkflowRun{Name: "CI", Event: "push", Status: "completed", Conclusion: "success", HeadSHA: "older-sha"}
+	dependabotUpdate := githubcli.WorkflowRun{Name: "go_modules in /. - Update #1", Event: "dynamic", Status: "in_progress", HeadSHA: "abc123"}
+
+	tests := []struct {
+		name        string
+		runs        []githubcli.WorkflowRun
+		grace       time.Duration
+		timeout     time.Duration
+		require     bool
+		wantErrIs   error
+		wantCalls   int
+		wantMinWait time.Duration
+	}{
+		{name: "no push history still waits for grace", runs: []githubcli.WorkflowRun{{Name: "Nightly", Event: "schedule", Status: "completed", Conclusion: "success", HeadSHA: "older-sha"}}, grace: 20 * time.Millisecond, timeout: time.Hour, wantMinWait: 20 * time.Millisecond},
+		{name: "no runs at all still waits for grace", grace: 20 * time.Millisecond, timeout: time.Hour, wantMinWait: 20 * time.Millisecond},
+		{name: "push CI that never starts continues after grace", runs: []githubcli.WorkflowRun{pushHistory}, grace: 20 * time.Millisecond, timeout: time.Hour, wantMinWait: 20 * time.Millisecond},
+		{name: "push CI that never starts continues at timeout before grace", runs: []githubcli.WorkflowRun{pushHistory}, grace: time.Hour, timeout: 20 * time.Millisecond, wantMinWait: 20 * time.Millisecond},
+		{name: "managed dynamic runs are not waited on", runs: []githubcli.WorkflowRun{pushHistory, dependabotUpdate}, grace: 20 * time.Millisecond, timeout: time.Hour, wantMinWait: 20 * time.Millisecond},
+		{name: "required post-merge CI times out", runs: []githubcli.WorkflowRun{pushHistory}, grace: time.Millisecond, timeout: 20 * time.Millisecond, require: true, wantErrIs: ErrPostMergeTimeout},
+		{name: "required post-merge CI ignores missing push history", grace: time.Millisecond, timeout: 20 * time.Millisecond, require: true, wantErrIs: ErrPostMergeTimeout},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			op := &repeatingRunsOperator{runs: tc.runs}
+			cfg := Config{PollInterval: time.Millisecond, PostMergeTimeout: tc.timeout, PostMergeGrace: tc.grace, RequirePostMergeCI: tc.require}
+			log := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+			start := time.Now()
+			err := waitForPostMergeCI(context.Background(), op, "owner/repo", "main", "abc123", cfg, log, nopProgress{})
+			elapsed := time.Since(start)
+
+			if tc.wantErrIs != nil {
+				if !errors.Is(err, tc.wantErrIs) {
+					t.Fatalf("error = %v, want %v", err, tc.wantErrIs)
+				}
+			} else if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if tc.wantCalls > 0 && op.calls != tc.wantCalls {
+				t.Fatalf("list calls = %d, want %d", op.calls, tc.wantCalls)
+			}
+			if elapsed < tc.wantMinWait {
+				t.Fatalf("returned after %s, want at least %s", elapsed, tc.wantMinWait)
+			}
+		})
+	}
+}
+
+func TestWaitForPostMergeCIDetectsLatePushRunWithoutPushHistory(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		runs []githubcli.WorkflowRun
+	}{
+		{name: "empty snapshot"},
+		{name: "only scheduled runs", runs: []githubcli.WorkflowRun{{Name: "Nightly", Event: "schedule", HeadSHA: "older-sha"}}},
+		{name: "only manual runs", runs: []githubcli.WorkflowRun{{Name: "Manual", Event: "workflow_dispatch", HeadSHA: "older-sha"}}},
+		{name: "only managed runs", runs: []githubcli.WorkflowRun{{Name: "Dependabot", Event: "dynamic", HeadSHA: "abc123", Status: "completed", Conclusion: "failure"}}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			op := &fakeOperator{runResults: map[string][][]githubcli.WorkflowRun{
+				"main": {
+					tc.runs,
+					{{Name: "CI", Event: "push", HeadSHA: "abc123", Status: "in_progress"}},
+					{{Name: "CI", Event: "push", HeadSHA: "abc123", Status: "completed", Conclusion: "failure"}},
+				},
+			}}
+			cfg := testConfig()
+			cfg.PostMergeGrace = 50 * time.Millisecond
+			err := waitForPostMergeCI(context.Background(), op, "owner/repo", "main", "abc123", cfg, testLogger(), nopProgress{})
+			if err == nil || !strings.Contains(err.Error(), `post-merge run "CI" failed`) {
+				t.Fatalf("error = %v, want late push failure", err)
+			}
+		})
+	}
+}
+
+func TestWaitForPostMergeCIIgnoresFailedManagedRuns(t *testing.T) {
+	t.Parallel()
+
+	op := &repeatingRunsOperator{runs: []githubcli.WorkflowRun{
+		{Name: "npm_and_yarn in /. - Update #7", Event: "dynamic", Status: "completed", Conclusion: "failure", HeadSHA: "abc123"},
+		{Name: "CI", Event: "push", Status: "completed", Conclusion: "success", HeadSHA: "abc123"},
+	}}
+	cfg := Config{PollInterval: time.Millisecond, PostMergeTimeout: time.Second, PostMergeGrace: time.Second}
+	if err := waitForPostMergeCI(context.Background(), op, "owner/repo", "main", "abc123", cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), nopProgress{}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }

@@ -11,6 +11,7 @@ type WorkflowRun struct {
 	Status     string `json:"status"`
 	Conclusion string `json:"conclusion"`
 	HeadSHA    string `json:"headSha"`
+	Event      string `json:"event"`
 	StartedAt  string `json:"startedAt"`
 }
 
@@ -22,7 +23,7 @@ func (c *client) ListWorkflowRuns(ctx context.Context, repo string, branch strin
 		"--branch",
 		branch,
 		"--json",
-		"name,status,conclusion,headSha,startedAt",
+		"name,status,conclusion,headSha,event,startedAt",
 	}
 	if repo != "" {
 		args = append(args, "--repo", repo)
