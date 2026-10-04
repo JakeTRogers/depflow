@@ -16,6 +16,7 @@ type FilterOptions struct {
 	RequireLabels       []string
 	ExcludeLabels       []string
 	SkipGrouped         bool
+	SecurityOnly        bool
 	IncludeDrafts       bool
 	ApplyDraftFilter    bool
 }
@@ -77,6 +78,10 @@ func exclusionReason(pr PR, opts FilterOptions) (string, bool) {
 
 	if opts.SkipGrouped && pr.Classification.Grouped {
 		return "grouped update excluded by --skip-grouped", true
+	}
+
+	if opts.SecurityOnly && !pr.Classification.Security.Update {
+		return "not a security update (--security-only)", true
 	}
 
 	return "", false

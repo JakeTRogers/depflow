@@ -31,6 +31,7 @@ var planFileConflictingFlags = []string{
 	"require-label",
 	"exclude-label",
 	"skip-grouped",
+	"security-only",
 	"change-kind",
 	"include-drafts",
 }

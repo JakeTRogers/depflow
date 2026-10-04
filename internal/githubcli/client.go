@@ -104,6 +104,7 @@ type Client interface {
 	ListWorkflowRuns(ctx context.Context, repo string, branch string) ([]WorkflowRun, error)
 	CompareBranches(ctx context.Context, repo string, base string, head string) (BranchComparison, error)
 	ResolveRepo(ctx context.Context) (string, error)
+	ListOpenDependabotAlerts(ctx context.Context, repo string) ([]DependabotAlert, error)
 }
 
 // NewClient returns a GitHub CLI client backed by the `gh` executable.

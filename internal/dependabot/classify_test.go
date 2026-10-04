@@ -850,9 +850,18 @@ func TestClassifyGroupedBodyReadsOnlyDependabotUpdateLists(t *testing.T) {
 			wantMajor: false,
 		},
 		{
-			name:      "unrecognized body format falls back to scanning all text",
+			name:      "unrecognized body format does not scan arbitrary text",
 			body:      "This group moves widget from 1.2.0 to 2.0.0.",
-			wantMajor: true,
+			wantMajor: false,
+		},
+		{
+			name:      "release notes without an update list are ignored",
+			body:      releaseNotes,
+			wantMajor: false,
+		},
+		{
+			name:      "empty body has no major signal",
+			wantMajor: false,
 		},
 	}
 

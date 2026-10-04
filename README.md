@@ -15,6 +15,7 @@ By default, `plan` and `execute` exclude major version updates and draft PRs; us
 - `--require-label` — only include PRs that have **all** of the given labels (repeatable or comma-separated)
 - `--exclude-label` — exclude PRs that have **any** of the given labels (repeatable or comma-separated)
 - `--skip-grouped` — exclude grouped Dependabot updates
+- `--security-only` — only include PRs that update a package with an open Dependabot security alert; fails if the alerts cannot be read (see [Security updates](#security-updates))
 
 These default to no restriction (everything passes) and apply identically across all three commands, so you can preview a filtered subset with `scan`/`plan` before running the same filters through `execute`.
 
@@ -27,7 +28,15 @@ PRs excluded by any filter are listed with their specific reason under an `Exclu
 
 ### scan
 
-Lists open Dependabot pull requests with metadata including classification signals: ecosystem, change kind, grouping, developer tooling, and infrastructure sensitivity.
+Lists open Dependabot pull requests with metadata including classification signals: ecosystem, change kind, grouping, developer tooling, infrastructure sensitivity, and security.
+
+### Security updates
+
+depflow reads the repository's open Dependabot alerts once per run and marks a PR as a security update when it updates a package with an open alert: the dependency in its title, or any package in a grouped update's list. Package names match case-insensitively (Python names per PEP 503), and the alert's ecosystem must agree with the PR's. Alerts are not matched by manifest directory, so in a monorepo an update in one directory can match an alert raised for another.
+
+The signal appears as `security=<severity>`, `security=no`, or `security=unknown` in `scan` and `plan --details`. The compact plan table adds a `SECURITY` column when any listed PR is a security update, and plan files note `# security: <severity>` on those lines. Within each bucket, security updates are processed first, most severe first; they do not move ahead of lower-risk buckets.
+
+Reading alerts requires access to them (repository admins and users granted security-alert access; fine-grained tokens need the Dependabot alerts read permission). Without it, every PR shows `security=unknown` and nothing else changes, except that `--security-only` fails rather than guessing.
 
 Developer-tooling and infrastructure-sensitive hints use keywords from the dependency name parsed from the PR title, or the lead dependency of a grouped update. Keywords match whole name segments split on punctuation, so `@aws-sdk/client-s3` matches `aws` but `drawsvg` does not. Project paths, labels, group names, and other title text do not set these hints. When the name can only be inferred from a branch, it is still displayed but does not contribute risk hints. These are keyword heuristics, not a complete assessment of dependency risk, and apply to `scan`, `plan`, and `execute` alike.
 
@@ -35,7 +44,7 @@ Developer-tooling and infrastructure-sensitive hints use keywords from the depen
 
 Shows deterministic classification and the preferred processing order. By default, `plan` excludes major version updates and drafts from the planned queue and lists them separately under `Excluded by filters` along with the reason each was excluded. Grouped summary PRs are also treated as major when the update list in their PR body (Dependabot's `Updates ... from A to B` lines and `Package | From | To` table) contains a major version bump; versions mentioned in bundled release notes and changelogs are ignored. Included PRs are sorted into buckets — ci, developer-tooling, patch, minor, grouped, unknown, infra-sensitive, major — so that lower-risk updates are processed first.
 
-The default listing is a compact table with execution order, PR number, bucket, ecosystem, dependency, and change kind. Every PR has its own row in processing order. Missing values appear as `unknown`; when no dependency name is available, the title is shown instead. Long identifiers are preserved rather than truncated.
+The default listing is a compact table with execution order, PR number, bucket, ecosystem, dependency, and change kind, plus a security column when any listed PR is a [security update](#security-updates). Every PR has its own row in processing order. Missing values appear as `unknown`; when no dependency name is available, the title is shown instead. Long identifiers are preserved rather than truncated.
 
 - `--details`: show full titles, classification signals, reasons, and URLs instead of the compact table
 - `-o, --output FILE` — write an [editable plan file](#editing-the-plan) instead of the listing (`-` writes it to stdout); cannot be combined with `--details`
@@ -210,7 +219,7 @@ depflow 0.1.0 (linux/amd64)
 - `--repo [HOST/]OWNER/REPO` — target an explicit GitHub repository; if omitted, `gh` attempts to infer the current repository and `execute` resolves that repo before mutating operations
 - `--limit N` — maximum number of eligible Dependabot pull requests to return after classification filtering (default: 100). Discovery expands the underlying open-PR query as needed, capped at 1000 pull requests, so PRs filtered out do not count against the limit. `plan` and `execute` keep the first N PRs in processing order and report how many more were cut; plan files list the cut PRs as `skip` lines. `scan` keeps the first N by PR number.
 - `-v, --verbose` — increase execute log verbosity (`-v` for info, `-vv` for debug, `-vvv` for trace)
-- `--ecosystem`, `--exclude-ecosystem`, `--dependency`, `--exclude-dependency`, `--require-label`, `--exclude-label`, `--skip-grouped` — see [Filtering](#filtering); shared by `scan`, `plan`, and `execute`
+- `--ecosystem`, `--exclude-ecosystem`, `--dependency`, `--exclude-dependency`, `--require-label`, `--exclude-label`, `--skip-grouped`, `--security-only` — see [Filtering](#filtering); shared by `scan`, `plan`, and `execute`
 
 ## Output Conventions
 

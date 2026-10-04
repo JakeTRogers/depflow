@@ -71,12 +71,13 @@ func writeScannedPR(writer io.Writer, pr dependabot.PR) error {
 	if dependencyName != "" {
 		fmt.Fprintf(&builder, "  dependency: %s\n", dependencyName)
 	}
-	fmt.Fprintf(&builder, "  classification: ecosystem=%s change=%s grouped=%s dev-tooling=%s infra-sensitive=%s\n",
+	fmt.Fprintf(&builder, "  classification: ecosystem=%s change=%s grouped=%s dev-tooling=%s infra-sensitive=%s security=%s\n",
 		displayOrUnknown(classification.Ecosystem),
 		classification.EffectiveChangeKind(),
 		yesNo(classification.Grouped),
 		yesNo(classification.DeveloperTooling),
-		yesNo(classification.InfrastructureSensitive))
+		yesNo(classification.InfrastructureSensitive),
+		securityLabel(classification.Security))
 	fmt.Fprintf(&builder, "  labels: %s\n", formatLabels(pr.Labels))
 	fmt.Fprintf(&builder, "  url: %s\n", url)
 

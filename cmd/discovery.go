@@ -40,7 +40,55 @@ func discoverDependabotPRs(ctx context.Context, deps commandDeps, opts *commandO
 		return dependabotPRs[i].Number < dependabotPRs[j].Number
 	})
 
+	if err := markSecurityUpdates(ctx, deps, opts, dependabotPRs); err != nil {
+		return nil, err
+	}
+
 	return dependabotPRs, nil
+}
+
+// markSecurityUpdates records which PRs fix open Dependabot alerts. Alerts need extra access, so
+// when they cannot be read the PRs keep an unknown status, unless --security-only depends on it.
+func markSecurityUpdates(ctx context.Context, deps commandDeps, opts *commandOptions, prs []dependabot.PR) error {
+	if len(prs) == 0 {
+		return nil
+	}
+	if deps.alerts == nil {
+		if opts.securityOnly {
+			return errors.New("--security-only needs the repository's Dependabot alerts, but no alert source is configured")
+		}
+		return nil
+	}
+
+	raw, err := deps.alerts.ListOpenDependabotAlerts(ctx, opts.repo)
+	if err != nil {
+		if opts.securityOnly {
+			return fmt.Errorf("--security-only needs read access to the repository's Dependabot alerts: %w", err)
+		}
+		return nil
+	}
+
+	alerts := make([]dependabot.Alert, 0, len(raw))
+	for _, alert := range raw {
+		alerts = append(alerts, dependabot.Alert{Ecosystem: alert.Ecosystem, Package: alert.Package, Severity: alert.Severity})
+	}
+	dependabot.MarkSecurityUpdates(prs, alerts)
+	return nil
+}
+
+// securityLabel describes a PR's security status: its alert severity, "no", or "unknown" when
+// alerts could not be read.
+func securityLabel(status dependabot.SecurityStatus) string {
+	switch {
+	case !status.Checked:
+		return "unknown"
+	case !status.Update:
+		return "no"
+	case status.Severity == "":
+		return "yes"
+	default:
+		return sanitize(status.Severity)
+	}
 }
 
 // applyLimit caps prs to opts.limit. Callers apply this after classification filtering so
@@ -185,6 +233,7 @@ func buildFilterOptions(opts *commandOptions, changeKinds []dependabot.ChangeKin
 		RequireLabels:       opts.requireLabels,
 		ExcludeLabels:       opts.excludeLabels,
 		SkipGrouped:         opts.skipGrouped,
+		SecurityOnly:        opts.securityOnly,
 		IncludeDrafts:       includeDrafts,
 		ApplyDraftFilter:    applyDraftFilter,
 	}

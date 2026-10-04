@@ -126,17 +126,35 @@ func writeCompactPlan(writer io.Writer, plan planner.Plan) error {
 	if len(plan.Items) == 0 {
 		return nil
 	}
+	// The SECURITY column appears only when it has something to show.
+	showSecurity := false
+	for _, item := range plan.Items {
+		showSecurity = showSecurity || item.PR.Classification.Security.Update
+	}
+
 	var builder strings.Builder
-	builder.WriteString("ORDER\tPR\tBUCKET\tECOSYSTEM\tDEPENDENCY\tCHANGE\n")
+	builder.WriteString("ORDER\tPR\tBUCKET\tECOSYSTEM\tDEPENDENCY\tCHANGE")
+	if showSecurity {
+		builder.WriteString("\tSECURITY")
+	}
+	builder.WriteString("\n")
 	for index, item := range plan.Items {
 		classification := item.PR.Classification
 		dependency := classification.DependencyName
 		if strings.TrimSpace(dependency) == "" {
 			dependency = item.PR.Title
 		}
-		fmt.Fprintf(&builder, "%d\t#%d\t%s\t%s\t%s\t%s\n", index+1, item.PR.Number,
+		fmt.Fprintf(&builder, "%d\t#%d\t%s\t%s\t%s\t%s", index+1, item.PR.Number,
 			planCell(string(item.Bucket)), planCell(classification.Ecosystem),
 			planCell(dependency), planCell(string(classification.EffectiveChangeKind())))
+		if showSecurity {
+			security := "-"
+			if classification.Security.Update {
+				security = securityLabel(classification.Security)
+			}
+			builder.WriteString("\t" + security)
+		}
+		builder.WriteString("\n")
 	}
 	table := tabwriter.NewWriter(writer, 0, 4, 2, ' ', 0)
 	if _, err := io.WriteString(table, builder.String()); err != nil {
@@ -165,12 +183,13 @@ func writePlannedPR(writer io.Writer, index int, item planner.PlannedPR) error {
 
 	var builder strings.Builder
 	fmt.Fprintf(&builder, "%d. #%d [%s] %s\n", index, item.PR.Number, item.Bucket, title)
-	fmt.Fprintf(&builder, "   signals: ecosystem=%s change=%s grouped=%s dev-tooling=%s infra-sensitive=%s\n",
+	fmt.Fprintf(&builder, "   signals: ecosystem=%s change=%s grouped=%s dev-tooling=%s infra-sensitive=%s security=%s\n",
 		displayOrUnknown(classification.Ecosystem),
 		classification.EffectiveChangeKind(),
 		yesNo(classification.Grouped),
 		yesNo(classification.DeveloperTooling),
-		yesNo(classification.InfrastructureSensitive))
+		yesNo(classification.InfrastructureSensitive),
+		securityLabel(classification.Security))
 	if dependencyName != "" {
 		fmt.Fprintf(&builder, "   dependency: %s\n", dependencyName)
 	}

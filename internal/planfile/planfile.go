@@ -104,6 +104,13 @@ func Write(w io.Writer, repo string, generated time.Time, picks []planner.Planne
 
 func writeLine(builder *strings.Builder, action Action, item planner.PlannedPR, note string) {
 	fmt.Fprintf(builder, "%s #%d [%s] %s", action, item.PR.Number, item.Bucket, oneLine(item.PR.Title))
+	if security := item.PR.Classification.Security; security.Update {
+		severity := security.Severity
+		if severity == "" {
+			severity = "unknown severity"
+		}
+		note = strings.TrimPrefix(note+"; security: "+severity, "; ")
+	}
 	if note = oneLine(note); note != "" {
 		fmt.Fprintf(builder, "  # %s", note)
 	}

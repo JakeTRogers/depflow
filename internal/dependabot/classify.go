@@ -26,13 +26,17 @@ const (
 
 // Classification contains the milestone-1 signals used by the planner.
 type Classification struct {
-	Ecosystem               string
-	DependencyName          string
+	Ecosystem      string
+	DependencyName string
+	// Dependencies lists every package the PR updates: the title's dependency, or for a grouped
+	// update the packages in Dependabot's update list.
+	Dependencies            []string
 	PreviousVersion         string
 	NextVersion             string
 	ChangeKind              ChangeKind
 	ContainsMajorUpdate     bool
 	Grouped                 bool
+	Security                SecurityStatus
 	CI                      bool
 	DeveloperTooling        bool
 	InfrastructureSensitive bool
@@ -55,8 +59,8 @@ var (
 	keywordSeparatorPattern       = regexp.MustCompile(`[^a-z0-9]+`)
 	// Dependabot lists a group's updates as "Updates `name` from A to B" lines and, for larger
 	// groups, a "| Package | From | To |" table whose versions are code spans.
-	groupedUpdateLinePattern = regexp.MustCompile("(?im)^updates\\s+`[^`]+`\\s+from\\s+((?:[<>=~^!]+\\s*)?\\S+)\\s+to\\s+((?:[<>=~^!]+\\s*)?\\S+)")
-	groupedUpdateRowPattern  = regexp.MustCompile("(?m)^\\|[^|\\n]+\\|\\s*`([^`]+)`\\s*\\|\\s*`([^`]+)`\\s*\\|")
+	groupedUpdateLinePattern = regexp.MustCompile("(?im)^updates\\s+`([^`]+)`\\s+from\\s+((?:[<>=~^!]+\\s*)?\\S+)\\s+to\\s+((?:[<>=~^!]+\\s*)?\\S+)")
+	groupedUpdateRowPattern  = regexp.MustCompile("(?m)^\\|\\s*(?:\\[([^\\]\\n]+)\\]\\([^)\\n]*\\)|([^|\\n]*?))\\s*\\|\\s*`([^`]+)`\\s*\\|\\s*`([^`]+)`\\s*\\|")
 
 	canonicalDependabotAuthors = map[string]struct{}{
 		"app/dependabot":          {},
@@ -189,8 +193,10 @@ func classify(title, body, headRef string, labels []string) Classification {
 	changeKind := inferChangeKind(previousVersion, nextVersion)
 	grouped := inferGrouped(title, headRef, labels)
 	containsMajorUpdate := false
+	dependencies := []string{dependencyName}
 	if grouped {
 		containsMajorUpdate = containsGroupedMajorUpdate(body)
+		dependencies = groupedDependencies(title, body)
 	}
 	signalText := dependencySignalText(title)
 	devMatches := matchKeywords(signalText, devToolingKeywords)
@@ -199,6 +205,7 @@ func classify(title, body, headRef string, labels []string) Classification {
 	return Classification{
 		Ecosystem:               ecosystem,
 		DependencyName:          dependencyName,
+		Dependencies:            dependencies,
 		PreviousVersion:         previousVersion,
 		NextVersion:             nextVersion,
 		ChangeKind:              changeKind,
@@ -424,24 +431,61 @@ func inferChangeKind(previousVersion, nextVersion string) ChangeKind {
 
 // containsGroupedMajorUpdate reports whether a grouped PR body lists a major update. Only
 // Dependabot's own update lines and table rows are read, so "from X to Y" text quoted in release
-// notes or changelogs is ignored; a body with neither falls back to scanning all of its text.
+// notes or changelogs is ignored, including when no update list is recognized.
 func containsGroupedMajorUpdate(body string) bool {
-	body = strings.TrimSpace(body)
-	matches := groupedUpdateLinePattern.FindAllStringSubmatch(body, -1)
-	matches = append(matches, groupedUpdateRowPattern.FindAllStringSubmatch(body, -1)...)
-	if len(matches) == 0 {
-		matches = fromToPattern.FindAllStringSubmatch(body, -1)
-	}
-	for _, match := range matches {
-		if len(match) != 3 {
-			continue
-		}
-		if inferChangeKind(match[1], match[2]) == ChangeMajor {
+	for _, update := range groupedBodyUpdates(body) {
+		if inferChangeKind(update.from, update.to) == ChangeMajor {
 			return true
 		}
 	}
 
 	return false
+}
+
+type bodyUpdate struct {
+	name string
+	from string
+	to   string
+}
+
+// groupedBodyUpdates reads Dependabot's update lines and table rows from a grouped PR body.
+func groupedBodyUpdates(body string) []bodyUpdate {
+	body = strings.TrimSpace(body)
+	var updates []bodyUpdate
+	for _, match := range groupedUpdateLinePattern.FindAllStringSubmatch(body, -1) {
+		updates = append(updates, bodyUpdate{name: match[1], from: match[2], to: match[3]})
+	}
+	for _, match := range groupedUpdateRowPattern.FindAllStringSubmatch(body, -1) {
+		name := match[1]
+		if name == "" {
+			name = match[2]
+		}
+		updates = append(updates, bodyUpdate{name: name, from: match[3], to: match[4]})
+	}
+	return updates
+}
+
+// groupedDependencies returns the distinct packages a grouped PR updates, starting with the lead
+// dependency named in its title.
+func groupedDependencies(title, body string) []string {
+	var names []string
+	seen := make(map[string]struct{})
+	add := func(name string) {
+		name = strings.TrimSpace(name)
+		key := strings.ToLower(name)
+		if _, ok := seen[key]; ok || name == "" {
+			return
+		}
+		seen[key] = struct{}{}
+		names = append(names, name)
+	}
+	if match, ok := parseGroupedTitle(title); ok {
+		add(match.leadDependency)
+	}
+	for _, update := range groupedBodyUpdates(body) {
+		add(update.name)
+	}
+	return names
 }
 
 // parseSemanticVersion parses the leading version of value, ignoring requirement operators such as
