@@ -813,3 +813,57 @@ func nonNil(values []string) []string {
 	}
 	return values
 }
+
+func TestClassifyGroupedBodyReadsOnlyDependabotUpdateLists(t *testing.T) {
+	t.Parallel()
+
+	const releaseNotes = "<details>\n<summary>Release notes</summary>\n<ul>\n<li>chore(deps): bump react-native from 0.76.9 to 1.0.0 by @dependabot</li>\n<li>Migrated config from v1 to v2 format</li>\n</ul>\n</details>\n"
+
+	tests := []struct {
+		name      string
+		body      string
+		wantMajor bool
+	}{
+		{
+			name:      "major text in release notes is ignored",
+			body:      "Bumps the frontend group with 1 update: [lucide-react](https://example.test).\n\nUpdates `lucide-react` from 1.31.0 to 1.49.0\n" + releaseNotes,
+			wantMajor: false,
+		},
+		{
+			name:      "major update line is detected",
+			body:      "Bumps the rust group in /rust with 2 updates: [a](x) and [b](y).\n\nUpdates `a` from 0.1.91 to 0.1.92\n" + releaseNotes + "Updates `b` from 1.4.1 to 2.0.0\n",
+			wantMajor: true,
+		},
+		{
+			name:      "major table row is detected when update lines were truncated",
+			body:      "Bumps the frontend group in /frontend with 16 updates:\n\n| Package | From | To |\n| --- | --- | --- |\n| [zod](https://example.test) | `4.4.3` | `4.6.5` |\n| [next](https://example.test) | `15.1.0` | `16.0.0` |\n",
+			wantMajor: true,
+		},
+		{
+			name:      "minor table rows with major release-note text",
+			body:      "Bumps the frontend group with 2 updates:\n\n| Package | From | To |\n| --- | --- | --- |\n| [zod](https://example.test) | `4.4.3` | `4.6.5` |\n| [prettier](https://example.test) | `3.9.6` | `3.9.9` |\n\nUpdates `zod` from 4.4.3 to 4.6.5\n" + releaseNotes,
+			wantMajor: false,
+		},
+		{
+			name:      "docker tag suffixes",
+			body:      "Bumps the docker-base-images group with 2 updates in the /rust/gateway directory: rust and alpine.\n\nUpdates `rust` from 1.94-alpine to 1.98-alpine\n\nUpdates `alpine` from 3.23 to 3.24\n",
+			wantMajor: false,
+		},
+		{
+			name:      "unrecognized body format falls back to scanning all text",
+			body:      "This group moves widget from 1.2.0 to 2.0.0.",
+			wantMajor: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			classification := classify("Bump the frontend group with 2 updates", test.body, "dependabot/npm_and_yarn/frontend-abc123", nil)
+			if classification.ContainsMajorUpdate != test.wantMajor {
+				t.Fatalf("ContainsMajorUpdate = %v, want %v", classification.ContainsMajorUpdate, test.wantMajor)
+			}
+		})
+	}
+}

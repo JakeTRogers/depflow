@@ -53,6 +53,10 @@ var (
 	commitSHAPattern              = regexp.MustCompile(`(?i)^[0-9a-f]{7,40}$`)
 	headVersionPattern            = regexp.MustCompile(`-(v?\d+(?:\.\d+){0,2}[^/]*)$`)
 	keywordSeparatorPattern       = regexp.MustCompile(`[^a-z0-9]+`)
+	// Dependabot lists a group's updates as "Updates `name` from A to B" lines and, for larger
+	// groups, a "| Package | From | To |" table whose versions are code spans.
+	groupedUpdateLinePattern = regexp.MustCompile("(?im)^updates\\s+`[^`]+`\\s+from\\s+((?:[<>=~^!]+\\s*)?\\S+)\\s+to\\s+((?:[<>=~^!]+\\s*)?\\S+)")
+	groupedUpdateRowPattern  = regexp.MustCompile("(?m)^\\|[^|\\n]+\\|\\s*`([^`]+)`\\s*\\|\\s*`([^`]+)`\\s*\\|")
 
 	canonicalDependabotAuthors = map[string]struct{}{
 		"app/dependabot":          {},
@@ -418,8 +422,16 @@ func inferChangeKind(previousVersion, nextVersion string) ChangeKind {
 	}
 }
 
+// containsGroupedMajorUpdate reports whether a grouped PR body lists a major update. Only
+// Dependabot's own update lines and table rows are read, so "from X to Y" text quoted in release
+// notes or changelogs is ignored; a body with neither falls back to scanning all of its text.
 func containsGroupedMajorUpdate(body string) bool {
-	matches := fromToPattern.FindAllStringSubmatch(strings.TrimSpace(body), -1)
+	body = strings.TrimSpace(body)
+	matches := groupedUpdateLinePattern.FindAllStringSubmatch(body, -1)
+	matches = append(matches, groupedUpdateRowPattern.FindAllStringSubmatch(body, -1)...)
+	if len(matches) == 0 {
+		matches = fromToPattern.FindAllStringSubmatch(body, -1)
+	}
 	for _, match := range matches {
 		if len(match) != 3 {
 			continue

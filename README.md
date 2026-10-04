@@ -33,7 +33,7 @@ Developer-tooling and infrastructure-sensitive hints use keywords from the depen
 
 ### plan
 
-Shows deterministic classification and the preferred processing order. By default, `plan` excludes major version updates and drafts from the planned queue and lists them separately under `Excluded by filters` along with the reason each was excluded. Grouped summary PRs are also treated as major when their PR body contains a major version bump. Included PRs are sorted into buckets — ci, developer-tooling, patch, minor, grouped, unknown, infra-sensitive, major — so that lower-risk updates are processed first.
+Shows deterministic classification and the preferred processing order. By default, `plan` excludes major version updates and drafts from the planned queue and lists them separately under `Excluded by filters` along with the reason each was excluded. Grouped summary PRs are also treated as major when the update list in their PR body (Dependabot's `Updates ... from A to B` lines and `Package | From | To` table) contains a major version bump; versions mentioned in bundled release notes and changelogs are ignored. Included PRs are sorted into buckets — ci, developer-tooling, patch, minor, grouped, unknown, infra-sensitive, major — so that lower-risk updates are processed first.
 
 The default listing is a compact table with execution order, PR number, bucket, ecosystem, dependency, and change kind. Every PR has its own row in processing order. Missing values appear as `unknown`; when no dependency name is available, the title is shown instead. Long identifiers are preserved rather than truncated.
 
