@@ -90,6 +90,8 @@ func TestBuildReasonBranches(t *testing.T) {
 		{name: "grouped major fallback", classification: dependabot.Classification{Grouped: true, ContainsMajorUpdate: true}, bucket: BucketMajor, wantContains: "contains at least one major version bump"},
 		{name: "infra", classification: dependabot.Classification{InfraSensitiveKeywords: []string{"docker"}}, bucket: BucketInfraSensitive, wantContains: "docker"},
 		{name: "unknown", classification: dependabot.Classification{}, bucket: BucketUnknown, wantContains: "conservative unknown bucket"},
+		{name: "commit update", classification: dependabot.Classification{PreviousVersion: "08eba0b27e820071cde6df949e0beb9ba4906955", NextVersion: "34e1148"}, bucket: BucketUnknown, wantContains: "commit update from 08eba0b to 34e1148"},
+		{name: "mixed commit update keeps version", classification: dependabot.Classification{PreviousVersion: "v1.2.3-beta.1", NextVersion: "34e1148"}, bucket: BucketUnknown, wantContains: "from v1.2.3-beta.1 to 34e1148"},
 		{name: "dev", classification: dependabot.Classification{DevToolingKeywords: []string{"golangci-lint"}}, bucket: BucketDevTooling, wantContains: "golangci-lint"},
 	}
 

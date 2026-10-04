@@ -49,6 +49,7 @@ var (
 	groupedSummaryTitlePattern    = regexp.MustCompile(`(?i)^bump\s+(?:the\s+)?(.+?)\s+group\b`)
 	conventionalCommitPattern     = regexp.MustCompile(`(?i)^[a-z][a-z0-9-]*(?:\([^)]*\))*!?:\s*`) // scopes may repeat: "deps(rust)(deps): "
 	versionPattern                = regexp.MustCompile(`(?i)^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?`)
+	commitSHAPattern              = regexp.MustCompile(`(?i)^[0-9a-f]{7,40}$`)
 	headVersionPattern            = regexp.MustCompile(`-(v?\d+(?:\.\d+){0,2}[^/]*)$`)
 
 	canonicalDependabotAuthors = map[string]struct{}{
@@ -131,6 +132,18 @@ func isDependabotAuthor(login string) bool {
 
 func (c Classification) HasMajorVersionBump() bool {
 	return c.ChangeKind == ChangeMajor || c.ContainsMajorUpdate
+}
+
+// IsCommitUpdate reports whether the PR moves between commit SHAs rather than versions.
+func (c Classification) IsCommitUpdate() bool {
+	return isCommitSHA(c.PreviousVersion) || isCommitSHA(c.NextVersion)
+}
+
+// isCommitSHA reports whether value looks like an abbreviated or full git commit SHA. All-digit
+// values are treated as versions (for example CalVer), so at least one hex letter is required.
+func isCommitSHA(value string) bool {
+	value = strings.TrimSpace(value)
+	return commitSHAPattern.MatchString(value) && strings.ContainsAny(strings.ToLower(value), "abcdef")
 }
 
 // EffectiveChangeKind returns the change kind used for filtering, bucketing, and display.
@@ -351,6 +364,11 @@ func matchKeywords(signalText string, keywords []string) []string {
 }
 
 func inferChangeKind(previousVersion, nextVersion string) ChangeKind {
+	// A SHA's leading digits are not a version, e.g. 08eba0b -> 34e1148 is not "major 8 -> 34".
+	if isCommitSHA(previousVersion) || isCommitSHA(nextVersion) {
+		return ChangeUnknown
+	}
+
 	fromVersion, ok := parseSemanticVersion(previousVersion)
 	if !ok {
 		return ChangeUnknown

@@ -203,6 +203,9 @@ func buildReason(classification dependabot.Classification, bucket Bucket) string
 	case BucketGrouped:
 		return "grouped update sorts after simple low-risk updates"
 	case BucketUnknown:
+		if classification.IsCommitUpdate() {
+			return fmt.Sprintf("commit update from %s to %s has no version impact; kept in the conservative unknown bucket", shortSHA(classification.PreviousVersion), shortSHA(classification.NextVersion))
+		}
 		return "insufficient metadata for a low-risk bucket; kept in the conservative unknown bucket"
 	case BucketInfraSensitive:
 		if len(classification.InfraSensitiveKeywords) > 0 {
@@ -220,4 +223,13 @@ func buildReason(classification dependabot.Classification, bucket Bucket) string
 	default:
 		return "deterministic tie-breakers applied"
 	}
+}
+
+// shortSHA abbreviates a full 40-character commit SHA to git's default seven characters and
+// leaves anything else, such as the version side of a mixed range, unchanged.
+func shortSHA(value string) string {
+	if len(value) == 40 {
+		return value[:7]
+	}
+	return value
 }

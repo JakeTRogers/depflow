@@ -698,3 +698,68 @@ func TestClassifyCommitPrefixVariants(t *testing.T) {
 		})
 	}
 }
+
+func TestClassifyCommitSHAUpdates(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		title      string
+		body       string
+		wantKind   ChangeKind
+		wantCommit bool
+	}{
+		{
+			name:       "full SHAs with leading digits",
+			title:      "Bump actions/checkout from 08eba0b27e820071cde6df949e0beb9ba4906955 to 34e114876b0b11c390a56381ad16ebd13914f8d5",
+			wantKind:   ChangeUnknown,
+			wantCommit: true,
+		},
+		{
+			name:       "abbreviated SHAs",
+			title:      "Bump mylib from 1a2b3c4 to 9f8e7d6",
+			wantKind:   ChangeUnknown,
+			wantCommit: true,
+		},
+		{
+			name:       "version to SHA",
+			title:      "Bump mylib from 1.2.3 to 9f8e7d6",
+			wantKind:   ChangeUnknown,
+			wantCommit: true,
+		},
+		{
+			name:     "all-digit CalVer is a version",
+			title:    "Bump certifi from 20240101 to 20250101",
+			wantKind: ChangeMajor,
+		},
+		{
+			name:     "plain semver",
+			title:    "Bump mylib from 1.2.3 to 1.2.4",
+			wantKind: ChangePatch,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			classification := classify(test.title, "", "", nil)
+			if classification.ChangeKind != test.wantKind {
+				t.Fatalf("ChangeKind = %q, want %q", classification.ChangeKind, test.wantKind)
+			}
+			if classification.IsCommitUpdate() != test.wantCommit {
+				t.Fatalf("IsCommitUpdate() = %v, want %v", classification.IsCommitUpdate(), test.wantCommit)
+			}
+		})
+	}
+}
+
+func TestClassifyGroupedBodyIgnoresCommitSHAUpdates(t *testing.T) {
+	t.Parallel()
+
+	body := "Updates `actions/checkout` from 08eba0b27e820071cde6df949e0beb9ba4906955 to 34e114876b0b11c390a56381ad16ebd13914f8d5"
+	classification := classify("Bump the actions group with 1 update", body, "dependabot/github_actions/actions-abc123", nil)
+	if classification.ContainsMajorUpdate {
+		t.Fatal("ContainsMajorUpdate = true, want false for a commit SHA update")
+	}
+}
