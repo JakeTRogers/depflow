@@ -30,7 +30,11 @@ func newPlanCommand(deps commandDeps, opts *commandOptions) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "plan",
 		Short: "Show the deterministic Dependabot processing order",
+		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if planOpts.details && planOpts.output != "" {
+				return errors.New("--details cannot be combined with --output; --output writes a plan file instead of the listing")
+			}
 			if planOpts.force && (planOpts.output == "" || planOpts.output == "-") {
 				return errors.New("--force only applies when writing a plan file with --output FILE")
 			}
@@ -97,7 +101,6 @@ func newPlanCommand(deps commandDeps, opts *commandOptions) *cobra.Command {
 	cmd.Flags().BoolVar(&planOpts.details, "details", false, "show full titles, classification signals, reasons, and URLs instead of the compact table")
 	cmd.Flags().StringVarP(&planOpts.output, "output", "o", "", "write an editable plan `FILE` for depflow execute --plan (- for stdout)")
 	cmd.Flags().BoolVar(&planOpts.force, "force", false, "overwrite an existing --output file")
-	cmd.MarkFlagsMutuallyExclusive("details", "output")
 
 	return cmd
 }

@@ -13,6 +13,7 @@ func newScanCommand(deps commandDeps, opts *commandOptions) *cobra.Command {
 	return &cobra.Command{
 		Use:   "scan",
 		Short: "List open Dependabot pull requests",
+		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			prs, err := discoverDependabotPRs(cmd.Context(), deps, opts)
 			if err != nil {

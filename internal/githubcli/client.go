@@ -15,6 +15,34 @@ import (
 
 const maxCommandErrorOutput = 512
 
+// ghExitAuthRequired is the exit status gh uses when authentication is required.
+const ghExitAuthRequired = 4
+
+// ErrAuthRequired reports that gh is not authenticated for the target host.
+var ErrAuthRequired = errors.New("gh authentication required")
+
+// commandError reports a failed gh invocation by gh's own message, falling back to the process
+// error (such as "exit status 1") when gh printed nothing.
+type commandError struct {
+	err    error
+	output string
+}
+
+func (e *commandError) Error() string {
+	if e.output != "" {
+		return e.output
+	}
+	return e.err.Error()
+}
+
+func (e *commandError) Unwrap() []error {
+	var coded interface{ ExitCode() int }
+	if errors.As(e.err, &coded) && coded.ExitCode() == ghExitAuthRequired {
+		return []error{e.err, ErrAuthRequired}
+	}
+	return []error{e.err}
+}
+
 type executor interface {
 	Run(ctx context.Context, args ...string) ([]byte, error)
 }
@@ -54,12 +82,7 @@ func (g ghExecutor) Run(ctx context.Context, args ...string) ([]byte, error) {
 			return nil, fmt.Errorf("gh CLI not found on PATH: %w", err)
 		}
 
-		trimmedOutput := truncateOutput(strings.TrimSpace(string(output)), maxCommandErrorOutput)
-		if trimmedOutput != "" {
-			return nil, fmt.Errorf("%w: %s", err, trimmedOutput)
-		}
-
-		return nil, err
+		return nil, &commandError{err: err, output: truncateOutput(strings.TrimSpace(string(output)), maxCommandErrorOutput)}
 	}
 
 	return output, nil
@@ -145,12 +168,23 @@ func truncateOutput(output string, limit int) string {
 func (c *client) runJSON(ctx context.Context, destination any, args ...string) error {
 	output, err := c.exec.Run(ctx, args...)
 	if err != nil {
-		return fmt.Errorf("running gh %s: %w", strings.Join(args, " "), err)
+		return fmt.Errorf("running gh %s: %w", commandSummary(args), err)
 	}
 
 	if err := json.Unmarshal(output, destination); err != nil {
-		return fmt.Errorf("decoding gh %s JSON: %w", strings.Join(args, " "), err)
+		return fmt.Errorf("decoding gh %s JSON: %w", commandSummary(args), err)
 	}
 
 	return nil
+}
+
+// commandSummary names a gh invocation by its leading non-flag arguments, such as "pr view 42",
+// so errors stay readable without repeating every flag and JSON field.
+func commandSummary(args []string) string {
+	for i, arg := range args {
+		if strings.HasPrefix(arg, "-") {
+			return strings.Join(args[:i], " ")
+		}
+	}
+	return strings.Join(args, " ")
 }

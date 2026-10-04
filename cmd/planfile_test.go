@@ -513,7 +513,7 @@ func TestExecutePlanFileErrors(t *testing.T) {
 		{
 			name: "edit and plan",
 			args: []string{"--repo", "owner/repo", "execute", "--plan", validPlan, "--edit"},
-			want: "none of the others can be",
+			want: "--edit cannot be combined with --plan",
 		},
 		{
 			name: "missing file",

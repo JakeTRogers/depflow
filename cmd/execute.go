@@ -11,6 +11,7 @@ import (
 	"github.com/JakeTRogers/depflow/internal/config"
 	"github.com/JakeTRogers/depflow/internal/dependabot"
 	"github.com/JakeTRogers/depflow/internal/executor"
+	"github.com/JakeTRogers/depflow/internal/githubcli"
 	"github.com/JakeTRogers/depflow/internal/planner"
 	"github.com/JakeTRogers/depflow/internal/progress"
 	"github.com/spf13/cobra"
@@ -50,7 +51,11 @@ func newExecuteCommand(deps commandDeps, opts *commandOptions) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "execute",
 		Short: "Process Dependabot PRs in planned order",
+		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if execOpts.edit && execOpts.planPath != "" {
+				return errors.New("--edit cannot be combined with --plan; edit the plan file directly, then run execute --plan")
+			}
 			if err := validateExecuteOptions(execOpts); err != nil {
 				return err
 			}
@@ -140,7 +145,6 @@ func newExecuteCommand(deps commandDeps, opts *commandOptions) *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&execOpts.edit, "edit", false, "edit the plan in $VISUAL/$EDITOR before executing (reorder lines, pick or skip PRs)")
 	cmd.Flags().StringVar(&execOpts.planPath, "plan", "", "execute a plan `FILE` written by depflow plan -o (- reads stdin)")
-	cmd.MarkFlagsMutuallyExclusive("edit", "plan")
 	cmd.Flags().StringSliceVar(&execOpts.changeKind, "change-kind", defaultChangeKindValues, "include only these change kinds: patch, minor, major, unknown, or all")
 	if err := cmd.RegisterFlagCompletionFunc("change-kind", changeKindCompletions); err != nil {
 		panic(err)
@@ -271,6 +275,10 @@ func resolveRepo(ctx context.Context, deps commandDeps, repo string) (string, er
 	}
 
 	resolvedRepo, err := deps.resolver.ResolveRepo(ctx)
+	if errors.Is(err, githubcli.ErrAuthRequired) {
+		// --repo cannot help when gh is not logged in; gh's own message says how to log in.
+		return "", fmt.Errorf("resolving current repository: %w", err)
+	}
 	if err != nil {
 		return "", fmt.Errorf("resolving current repository: %w; %s", err, rerunWithRepoHint(""))
 	}

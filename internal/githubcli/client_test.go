@@ -2,6 +2,7 @@ package githubcli
 
 import (
 	"context"
+	"errors"
 	"os/exec"
 	"reflect"
 	"strings"
@@ -157,5 +158,73 @@ func TestResolveRepo(t *testing.T) {
 	}
 	if !reflect.DeepEqual(executor.calls[0], wantArgs) {
 		t.Fatalf("args = %#v, want %#v", executor.calls[0], wantArgs)
+	}
+}
+
+func TestGHExecutorRunReportsGHMessageAndAuthFailures(t *testing.T) {
+	original := execCommandContext
+	defer func() {
+		execCommandContext = original
+	}()
+
+	tests := []struct {
+		name     string
+		script   string
+		wantText string
+		wantAuth bool
+	}{
+		{name: "auth required", script: "echo 'To get started with GitHub CLI, please run:  gh auth login' 1>&2; exit 4", wantText: "To get started with GitHub CLI, please run:  gh auth login", wantAuth: true},
+		{name: "other failure", script: "echo 'GraphQL: Could not resolve to a Repository' 1>&2; exit 1", wantText: "GraphQL: Could not resolve to a Repository"},
+		{name: "silent failure", script: "exit 1", wantText: "exit status 1"},
+	}
+
+	for _, test := range tests {
+		execCommandContext = func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
+			return exec.CommandContext(ctx, "sh", "-c", test.script)
+		}
+
+		_, err := ghExecutor{path: "/usr/bin/gh"}.Run(context.Background(), "pr", "list")
+		if err == nil || err.Error() != test.wantText {
+			t.Fatalf("%s: error = %v, want %q", test.name, err, test.wantText)
+		}
+		if got := errors.Is(err, ErrAuthRequired); got != test.wantAuth {
+			t.Fatalf("%s: errors.Is(err, ErrAuthRequired) = %v, want %v", test.name, got, test.wantAuth)
+		}
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) {
+			t.Fatalf("%s: error does not wrap *exec.ExitError: %v", test.name, err)
+		}
+	}
+}
+
+func TestRunJSONErrorNamesCommandWithoutFlags(t *testing.T) {
+	t.Parallel()
+
+	client := newClient(&stubExecutor{err: &commandError{err: errors.New("exit status 1"), output: "GraphQL: boom"}})
+	_, err := client.ListOpenPullRequests(context.Background(), "owner/repo", 100)
+	if err == nil {
+		t.Fatal("ListOpenPullRequests() error = nil, want non-nil")
+	}
+	if !strings.Contains(err.Error(), "running gh pr list: GraphQL: boom") || strings.Contains(err.Error(), "--json") {
+		t.Fatalf("error = %q, want short command name and gh message", err)
+	}
+}
+
+func TestCommandSummary(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		args []string
+		want string
+	}{
+		{args: []string{"pr", "list", "--state", "open", "--json", "number,title"}, want: "pr list"},
+		{args: []string{"pr", "view", "42", "--json", "state"}, want: "pr view 42"},
+		{args: []string{"api", "repos/o/r/compare/main...dep"}, want: "api repos/o/r/compare/main...dep"},
+		{args: []string{"api", "graphql", "-f", "query=x"}, want: "api graphql"},
+	}
+	for _, test := range tests {
+		if got := commandSummary(test.args); got != test.want {
+			t.Errorf("commandSummary(%v) = %q, want %q", test.args, got, test.want)
+		}
 	}
 }

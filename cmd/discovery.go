@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -20,7 +21,7 @@ func discoverDependabotPRs(ctx context.Context, deps commandDeps, opts *commandO
 
 	prs, err := listOpenPullRequestsForDiscovery(ctx, deps, opts)
 	if err != nil {
-		if opts.repo == "" {
+		if opts.repo == "" && !errors.Is(err, githubcli.ErrAuthRequired) {
 			return nil, fmt.Errorf("discovering open pull requests: %w; %s", err, rerunWithRepoHint("if the current repository cannot be inferred"))
 		}
 		return nil, fmt.Errorf("discovering open pull requests: %w", err)

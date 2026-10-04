@@ -3,6 +3,8 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"runtime"
 	"strings"
 	"testing"
@@ -414,8 +416,8 @@ func TestPlanCommandRejectsDetailsWithOutput(t *testing.T) {
 
 	lister := &fakeLister{}
 	_, err := executeTestCommand(t, lister, "plan", "--details", "--output", "-")
-	if err == nil || !strings.Contains(err.Error(), "details output") {
-		t.Fatalf("error = %v, want mutually exclusive flag error", err)
+	if err == nil || !strings.Contains(err.Error(), "--details cannot be combined with --output") {
+		t.Fatalf("error = %v, want conflicting flag error", err)
 	}
 	if len(lister.limits) != 0 {
 		t.Fatal("conflicting output flags should be rejected before discovery")
@@ -648,5 +650,51 @@ func TestHelpShowsFilePlaceholders(t *testing.T) {
 		if !strings.Contains(run.stdout, test.want) {
 			t.Fatalf("%v: help missing %q:\n%s", test.args, test.want, run.stdout)
 		}
+	}
+}
+
+func TestCommandsRejectPositionalArguments(t *testing.T) {
+	t.Parallel()
+
+	for _, command := range []string{"scan", "plan", "execute", "version"} {
+		lister := &fakeLister{}
+		_, err := executeTestCommand(t, lister, "--repo", "owner/repo", command, "extra-arg")
+		if err == nil || !strings.Contains(err.Error(), `unknown command "extra-arg"`) {
+			t.Fatalf("%s extra-arg: error = %v, want unknown command error", command, err)
+		}
+		if len(lister.limits) != 0 {
+			t.Fatalf("%s extra-arg: discovery ran before argument validation", command)
+		}
+	}
+}
+
+func TestRepoHintOmittedForAuthFailures(t *testing.T) {
+	t.Parallel()
+
+	authErr := fmt.Errorf("running gh pr list: %w", githubcli.ErrAuthRequired)
+	tests := []struct {
+		name     string
+		deps     commandDeps
+		args     []string
+		wantHint bool
+	}{
+		{name: "discovery auth failure", deps: commandDeps{lister: &fakeLister{err: authErr}}, args: []string{"plan"}},
+		{name: "discovery other failure", deps: commandDeps{lister: &fakeLister{err: errors.New("not a git repository")}}, args: []string{"plan"}, wantHint: true},
+		{name: "repo resolution auth failure", deps: commandDeps{lister: planFileFixture(), resolver: &fakeRepoResolver{err: authErr}}, args: []string{"plan", "-o", "-"}},
+		{name: "repo resolution other failure", deps: commandDeps{lister: planFileFixture(), resolver: &fakeRepoResolver{err: errors.New("no git remotes")}}, args: []string{"plan", "-o", "-"}, wantHint: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			run := runWithDeps(t, test.deps, "", test.args...)
+			if run.err == nil {
+				t.Fatal("Execute() error = nil, want non-nil")
+			}
+			if got := strings.Contains(run.err.Error(), rerunWithRepoFlagHint); got != test.wantHint {
+				t.Fatalf("error = %q, hint present = %v, want %v", run.err, got, test.wantHint)
+			}
+		})
 	}
 }
