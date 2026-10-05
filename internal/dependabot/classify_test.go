@@ -532,3 +532,347 @@ func TestEffectiveChangeKind(t *testing.T) {
 		})
 	}
 }
+
+func TestClassifyRequirementUpdateTitles(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		title          string
+		headRef        string
+		wantDependency string
+		wantFrom       string
+		wantTo         string
+		wantKind       ChangeKind
+		wantDevTooling bool
+	}{
+		{
+			name:           "pip lower bound major",
+			title:          "Update redis requirement from >=7.4.0 to >=8.1.0",
+			headRef:        "dependabot/pip/redis-gte-8.1.0",
+			wantDependency: "redis",
+			wantFrom:       ">=7.4.0",
+			wantTo:         ">=8.1.0",
+			wantKind:       ChangeMajor,
+		},
+		{
+			name:           "conventional commit prefix and directory",
+			title:          "build(deps-dev): update mypy requirement from >=1.11.0 to >=2.4.0 in /agents",
+			headRef:        "dependabot/pip/agents/mypy-gte-2.4.0",
+			wantDependency: "mypy",
+			wantFrom:       ">=1.11.0",
+			wantTo:         ">=2.4.0",
+			wantKind:       ChangeMajor,
+			wantDevTooling: true,
+		},
+		{
+			name:           "compatible release minor",
+			title:          "Update requests requirement from ~=2.31 to ~=2.32",
+			headRef:        "dependabot/pip/requests-tw-2.32",
+			wantDependency: "requests",
+			wantFrom:       "~=2.31",
+			wantTo:         "~=2.32",
+			wantKind:       ChangeMinor,
+		},
+		{
+			name:           "bundler pessimistic operator with space",
+			title:          "Update rails requirement from ~> 6.1 to ~> 7.0",
+			headRef:        "dependabot/bundler/rails-tw-7.0",
+			wantDependency: "rails",
+			wantFrom:       "~> 6.1",
+			wantTo:         "~> 7.0",
+			wantKind:       ChangeMajor,
+		},
+		{
+			name:           "npm caret range patch",
+			title:          "Bump lodash from ^4.17.20 to ^4.17.21",
+			headRef:        "dependabot/npm_and_yarn/lodash-4.17.21",
+			wantDependency: "lodash",
+			wantFrom:       "^4.17.20",
+			wantTo:         "^4.17.21",
+			wantKind:       ChangePatch,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			classification := classify(test.title, "", test.headRef, []string{"dependencies"})
+			if classification.DependencyName != test.wantDependency {
+				t.Fatalf("DependencyName = %q, want %q", classification.DependencyName, test.wantDependency)
+			}
+			if classification.PreviousVersion != test.wantFrom || classification.NextVersion != test.wantTo {
+				t.Fatalf("versions = %q -> %q, want %q -> %q", classification.PreviousVersion, classification.NextVersion, test.wantFrom, test.wantTo)
+			}
+			if classification.ChangeKind != test.wantKind {
+				t.Fatalf("ChangeKind = %q, want %q", classification.ChangeKind, test.wantKind)
+			}
+			if classification.DeveloperTooling != test.wantDevTooling {
+				t.Fatalf("DeveloperTooling = %v, want %v", classification.DeveloperTooling, test.wantDevTooling)
+			}
+		})
+	}
+}
+
+func TestClassifyGroupedBodyMajorDetectionWithRequirementOperators(t *testing.T) {
+	t.Parallel()
+
+	body := "Updates the requirements on [redis](https://github.com/redis/redis-py) to permit the latest version.\nUpdates `redis` from >=7.4.0 to >=8.1.0"
+	classification := classify("Bump the python group with 1 update", body, "dependabot/pip/python-abc123", []string{"dependencies"})
+	if !classification.ContainsMajorUpdate {
+		t.Fatal("ContainsMajorUpdate = false, want true")
+	}
+}
+
+func TestClassifyCommitPrefixVariants(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		title          string
+		headRef        string
+		body           string
+		wantDependency string
+		wantGrouped    bool
+		wantKind       ChangeKind
+		wantDevTooling bool
+	}{
+		{
+			name:           "repeated scope single dependency with directory",
+			title:          "deps(rust)(deps): bump aes from 0.8.4 to 0.9.3 in /rust",
+			headRef:        "dependabot/cargo/rust/aes-0.9.3",
+			wantDependency: "aes",
+			wantKind:       ChangeMinor,
+		},
+		{
+			name:           "repeated scope dev dependency keyword",
+			title:          "deps(frontend)(deps-dev): bump eslint from 9.39.2 to 10.11.0 in /frontend",
+			headRef:        "dependabot/npm_and_yarn/frontend/eslint-10.11.0",
+			wantDependency: "eslint",
+			wantKind:       ChangeMajor,
+			wantDevTooling: true,
+		},
+		{
+			name:           "repeated scope grouped summary with body major",
+			title:          "deps(rust)(deps): bump the rust-minor-patch group in /rust with 2 updates",
+			headRef:        "dependabot/cargo/rust/rust-minor-patch-17d15c0d11",
+			body:           "Updates `tokio` from 1.49.0 to 2.0.0",
+			wantDependency: "rust minor patch group",
+			wantGrouped:    true,
+			wantKind:       ChangeMajor,
+		},
+		{
+			name:           "repeated scope requirement update",
+			title:          "deps(python)(deps): update redis requirement from >=7.4.0 to >=8.1.0 in /agents/qa_agent",
+			headRef:        "dependabot/pip/agents/qa_agent/redis-gte-8.1.0",
+			wantDependency: "redis",
+			wantKind:       ChangeMajor,
+		},
+		{
+			name:           "capitalized type",
+			title:          "Chore(deps): bump cobra from 1.9.0 to 1.10.2",
+			headRef:        "dependabot/go_modules/github.com/spf13/cobra-1.10.2",
+			wantDependency: "cobra",
+			wantKind:       ChangeMinor,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			classification := classify(test.title, test.body, test.headRef, []string{"dependencies"})
+			if classification.DependencyName != test.wantDependency {
+				t.Fatalf("DependencyName = %q, want %q", classification.DependencyName, test.wantDependency)
+			}
+			if classification.Grouped != test.wantGrouped {
+				t.Fatalf("Grouped = %v, want %v", classification.Grouped, test.wantGrouped)
+			}
+			if got := classification.EffectiveChangeKind(); got != test.wantKind {
+				t.Fatalf("EffectiveChangeKind() = %q, want %q", got, test.wantKind)
+			}
+			if classification.DeveloperTooling != test.wantDevTooling {
+				t.Fatalf("DeveloperTooling = %v, want %v", classification.DeveloperTooling, test.wantDevTooling)
+			}
+		})
+	}
+}
+
+func TestClassifyCommitSHAUpdates(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		title      string
+		body       string
+		wantKind   ChangeKind
+		wantCommit bool
+	}{
+		{
+			name:       "full SHAs with leading digits",
+			title:      "Bump actions/checkout from 08eba0b27e820071cde6df949e0beb9ba4906955 to 34e114876b0b11c390a56381ad16ebd13914f8d5",
+			wantKind:   ChangeUnknown,
+			wantCommit: true,
+		},
+		{
+			name:       "abbreviated SHAs",
+			title:      "Bump mylib from 1a2b3c4 to 9f8e7d6",
+			wantKind:   ChangeUnknown,
+			wantCommit: true,
+		},
+		{
+			name:       "version to SHA",
+			title:      "Bump mylib from 1.2.3 to 9f8e7d6",
+			wantKind:   ChangeUnknown,
+			wantCommit: true,
+		},
+		{
+			name:     "all-digit CalVer is a version",
+			title:    "Bump certifi from 20240101 to 20250101",
+			wantKind: ChangeMajor,
+		},
+		{
+			name:     "plain semver",
+			title:    "Bump mylib from 1.2.3 to 1.2.4",
+			wantKind: ChangePatch,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			classification := classify(test.title, "", "", nil)
+			if classification.ChangeKind != test.wantKind {
+				t.Fatalf("ChangeKind = %q, want %q", classification.ChangeKind, test.wantKind)
+			}
+			if classification.IsCommitUpdate() != test.wantCommit {
+				t.Fatalf("IsCommitUpdate() = %v, want %v", classification.IsCommitUpdate(), test.wantCommit)
+			}
+		})
+	}
+}
+
+func TestClassifyGroupedBodyIgnoresCommitSHAUpdates(t *testing.T) {
+	t.Parallel()
+
+	body := "Updates `actions/checkout` from 08eba0b27e820071cde6df949e0beb9ba4906955 to 34e114876b0b11c390a56381ad16ebd13914f8d5"
+	classification := classify("Bump the actions group with 1 update", body, "dependabot/github_actions/actions-abc123", nil)
+	if classification.ContainsMajorUpdate {
+		t.Fatal("ContainsMajorUpdate = true, want false for a commit SHA update")
+	}
+}
+
+func TestClassifyKeywordsMatchWholeNameSegments(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		dependency string
+		wantDev    []string
+		wantInfra  []string
+	}{
+		{dependency: "python-social-auth"},
+		{dependency: "velocity"},
+		{dependency: "drawsvg"},
+		{dependency: "toxiproxy"},
+		{dependency: "org.testcontainers:testcontainers"},
+		{dependency: "blackfriday"},
+		{dependency: "@aws-sdk/client-s3", wantInfra: []string{"aws"}},
+		{dependency: "software.amazon.awssdk:s3", wantInfra: []string{"awssdk"}},
+		{dependency: "awscli", wantInfra: []string{"awscli"}},
+		{dependency: "github.com/containerd/containerd", wantInfra: []string{"containerd"}},
+		{dependency: "@google-cloud/storage", wantInfra: []string{"google-cloud"}},
+		{dependency: "k8s.io/client-go", wantInfra: []string{"k8s"}},
+		{dependency: "docker/build-push-action", wantInfra: []string{"docker"}},
+		{dependency: "github.com/golangci/golangci-lint", wantDev: []string{"golangci-lint"}},
+		{dependency: "@typescript-eslint/parser", wantDev: []string{"eslint"}},
+		{dependency: "pytest_asyncio", wantDev: []string{"pytest"}},
+		{dependency: "@vitest/coverage-v8", wantDev: []string{"coverage", "vitest"}},
+		{dependency: "tox", wantDev: []string{"tox"}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.dependency, func(t *testing.T) {
+			t.Parallel()
+
+			classification := classify("Bump "+test.dependency+" from 1.0.0 to 1.0.1", "", "", nil)
+			if !reflect.DeepEqual(nonNil(classification.DevToolingKeywords), nonNil(test.wantDev)) {
+				t.Fatalf("DevToolingKeywords = %v, want %v", classification.DevToolingKeywords, test.wantDev)
+			}
+			if !reflect.DeepEqual(nonNil(classification.InfraSensitiveKeywords), nonNil(test.wantInfra)) {
+				t.Fatalf("InfraSensitiveKeywords = %v, want %v", classification.InfraSensitiveKeywords, test.wantInfra)
+			}
+		})
+	}
+}
+
+func nonNil(values []string) []string {
+	if values == nil {
+		return []string{}
+	}
+	return values
+}
+
+func TestClassifyGroupedBodyReadsOnlyDependabotUpdateLists(t *testing.T) {
+	t.Parallel()
+
+	const releaseNotes = "<details>\n<summary>Release notes</summary>\n<ul>\n<li>chore(deps): bump react-native from 0.76.9 to 1.0.0 by @dependabot</li>\n<li>Migrated config from v1 to v2 format</li>\n</ul>\n</details>\n"
+
+	tests := []struct {
+		name      string
+		body      string
+		wantMajor bool
+	}{
+		{
+			name:      "major text in release notes is ignored",
+			body:      "Bumps the frontend group with 1 update: [lucide-react](https://example.test).\n\nUpdates `lucide-react` from 1.31.0 to 1.49.0\n" + releaseNotes,
+			wantMajor: false,
+		},
+		{
+			name:      "major update line is detected",
+			body:      "Bumps the rust group in /rust with 2 updates: [a](x) and [b](y).\n\nUpdates `a` from 0.1.91 to 0.1.92\n" + releaseNotes + "Updates `b` from 1.4.1 to 2.0.0\n",
+			wantMajor: true,
+		},
+		{
+			name:      "major table row is detected when update lines were truncated",
+			body:      "Bumps the frontend group in /frontend with 16 updates:\n\n| Package | From | To |\n| --- | --- | --- |\n| [zod](https://example.test) | `4.4.3` | `4.6.5` |\n| [next](https://example.test) | `15.1.0` | `16.0.0` |\n",
+			wantMajor: true,
+		},
+		{
+			name:      "minor table rows with major release-note text",
+			body:      "Bumps the frontend group with 2 updates:\n\n| Package | From | To |\n| --- | --- | --- |\n| [zod](https://example.test) | `4.4.3` | `4.6.5` |\n| [prettier](https://example.test) | `3.9.6` | `3.9.9` |\n\nUpdates `zod` from 4.4.3 to 4.6.5\n" + releaseNotes,
+			wantMajor: false,
+		},
+		{
+			name:      "docker tag suffixes",
+			body:      "Bumps the docker-base-images group with 2 updates in the /rust/gateway directory: rust and alpine.\n\nUpdates `rust` from 1.94-alpine to 1.98-alpine\n\nUpdates `alpine` from 3.23 to 3.24\n",
+			wantMajor: false,
+		},
+		{
+			name:      "unrecognized body format does not scan arbitrary text",
+			body:      "This group moves widget from 1.2.0 to 2.0.0.",
+			wantMajor: false,
+		},
+		{
+			name:      "release notes without an update list are ignored",
+			body:      releaseNotes,
+			wantMajor: false,
+		},
+		{
+			name:      "empty body has no major signal",
+			wantMajor: false,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			classification := classify("Bump the frontend group with 2 updates", test.body, "dependabot/npm_and_yarn/frontend-abc123", nil)
+			if classification.ContainsMajorUpdate != test.wantMajor {
+				t.Fatalf("ContainsMajorUpdate = %v, want %v", classification.ContainsMajorUpdate, test.wantMajor)
+			}
+		})
+	}
+}

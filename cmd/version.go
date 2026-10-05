@@ -7,11 +7,12 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var version = "2.2.1"
+var version = "2.3.0"
 
 func newVersionCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "version",
+		Args:  cobra.NoArgs,
 		Short: "Print version information",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "depflow %s (%s/%s)\n", version, runtime.GOOS, runtime.GOARCH); err != nil {

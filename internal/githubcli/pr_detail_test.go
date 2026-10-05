@@ -52,7 +52,7 @@ func TestViewPullRequest(t *testing.T) {
 		"view",
 		"42",
 		"--json",
-		"number,title,state,mergeable,mergeCommit,headRefName,baseRefName,statusCheckRollup",
+		"number,title,state,mergeable,mergeCommit,headRefName,headRefOid,baseRefName,statusCheckRollup",
 		"--repo",
 		"owner/repo",
 	}

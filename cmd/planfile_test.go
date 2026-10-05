@@ -242,6 +242,47 @@ func TestPlanOutputReportsEmptyResultsOnStderr(t *testing.T) {
 	}
 }
 
+func TestPlanOutputFileRefusesToOverwrite(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "plan.txt")
+	const edited = "repo owner/repo\npick #10 [patch] hand-edited\n"
+	if err := os.WriteFile(path, []byte(edited), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	run := runWithDeps(t, commandDeps{lister: planFileFixture()}, "", "--repo", "owner/repo", "plan", "-o", path)
+	if run.err == nil || !strings.Contains(run.err.Error(), "already exists; pass --force to overwrite it") {
+		t.Fatalf("error = %v, want already exists error", run.err)
+	}
+	if content, err := os.ReadFile(path); err != nil || string(content) != edited {
+		t.Fatalf("existing plan changed: %q, %v", content, err)
+	}
+
+	run = runWithDeps(t, commandDeps{lister: planFileFixture()}, "", "--repo", "owner/repo", "plan", "-o", path, "--force")
+	if run.err != nil {
+		t.Fatalf("Execute() with --force error = %v", run.err)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if strings.Contains(string(content), "hand-edited") || !strings.Contains(string(content), "pick #13 [ci]") {
+		t.Fatalf("--force did not replace the plan:\n%s", content)
+	}
+}
+
+func TestPlanForceRequiresOutputFile(t *testing.T) {
+	t.Parallel()
+
+	for _, args := range [][]string{{"plan", "--force"}, {"plan", "-o", "-", "--force"}} {
+		run := runWithDeps(t, commandDeps{lister: planFileFixture()}, "", append([]string{"--repo", "owner/repo"}, args...)...)
+		if run.err == nil || !strings.Contains(run.err.Error(), "--force only applies") {
+			t.Fatalf("%v: error = %v, want --force usage error", args, run.err)
+		}
+	}
+}
+
 func TestPlanOutputFileCreateError(t *testing.T) {
 	t.Parallel()
 
@@ -314,6 +355,66 @@ func TestExecutePlanFileReportsDroppedAndDriftedPRs(t *testing.T) {
 	}
 	if strings.Contains(run.stdout, "Left alone") {
 		t.Fatalf("stdout should not report unlisted PRs when every PR is listed:\n%s", run.stdout)
+	}
+}
+
+func TestExecutePlanFileBlocksPicksThatBecameMajor(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		lines      []string
+		wantStdout []string
+		wantAbsent []string
+	}{
+		{
+			name:  "drift into major is not processed",
+			lines: []string{"repo owner/repo", "pick #12 [minor] react", "pick #10 [patch] lodash"},
+			wantStdout: []string{
+				"Not processed: #12 is now [major], was [minor] when planned; change its bucket to [major] in the plan file to include it\n",
+				"Dry run: 1 PR(s) would be processed in this order:",
+				"1. #10 [patch]",
+			},
+			wantAbsent: []string{"1. #12", "2. #12", "Warning: #12"},
+		},
+		{
+			name:       "recording the major bucket re-confirms the pick",
+			lines:      []string{"repo owner/repo", "pick #12 [Major] react", "pick #10 [patch] lodash"},
+			wantStdout: []string{"Dry run: 2 PR(s) would be processed in this order:", "1. #12 [major]"},
+			wantAbsent: []string{"Not processed", "Warning"},
+		},
+		{
+			name:       "every pick blocked",
+			lines:      []string{"repo owner/repo", "pick #12 [patch] react"},
+			wantStdout: []string{"Not processed: #12 is now [major]", noOpenPickedPRsMessage},
+			wantAbsent: []string{"Dry run:"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			operator := &fakeExecuteOperator{}
+			path := writeTestPlan(t, test.lines...)
+			run := runWithDeps(t, commandDeps{lister: planFileFixture(), operator: operator}, "", "--repo", "owner/repo", "execute", "--plan", path, "--dry-run")
+			if run.err != nil {
+				t.Fatalf("Execute() error = %v", run.err)
+			}
+			for _, fragment := range test.wantStdout {
+				if !strings.Contains(run.stdout, fragment) {
+					t.Fatalf("stdout missing %q:\n%s", fragment, run.stdout)
+				}
+			}
+			for _, fragment := range test.wantAbsent {
+				if strings.Contains(run.stdout, fragment) {
+					t.Fatalf("stdout should not contain %q:\n%s", fragment, run.stdout)
+				}
+			}
+			if len(operator.approvedRepos) != 0 || len(operator.mergedRepos) != 0 {
+				t.Fatalf("dry run approved %v, merged %v", operator.approvedRepos, operator.mergedRepos)
+			}
+		})
 	}
 }
 
@@ -412,7 +513,7 @@ func TestExecutePlanFileErrors(t *testing.T) {
 		{
 			name: "edit and plan",
 			args: []string{"--repo", "owner/repo", "execute", "--plan", validPlan, "--edit"},
-			want: "none of the others can be",
+			want: "--edit cannot be combined with --plan",
 		},
 		{
 			name: "missing file",
@@ -710,4 +811,70 @@ func dryRunNumbers(stdout string) []string {
 		}
 	}
 	return numbers
+}
+
+func TestLimitKeepsFirstPRsInPlanOrder(t *testing.T) {
+	t.Parallel()
+
+	// planFileFixture plans #13 [ci], #10 [patch], #11 [minor]; the lowest-numbered PRs (#10, #11)
+	// are not the first ones in plan order.
+	tests := []struct {
+		name       string
+		args       []string
+		wantStdout []string
+		wantAbsent []string
+	}{
+		{
+			name: "plan",
+			args: []string{"--limit", "1", "plan"},
+			wantStdout: []string{
+				"Planned order for 1 Dependabot pull request(s)",
+				"#13",
+				"Not included: 2 more eligible PR(s) beyond --limit 1\n",
+			},
+			wantAbsent: []string{"#10", "#11"},
+		},
+		{
+			name: "execute dry run",
+			args: []string{"--limit", "2", "execute", "--dry-run"},
+			wantStdout: []string{
+				"Not included: 1 more eligible PR(s) beyond --limit 2\n\nDry run: 2 PR(s) would be processed in this order:",
+				"1. #13 [ci]",
+				"2. #10 [patch]",
+			},
+			wantAbsent: []string{"#11 [minor]"},
+		},
+		{
+			name: "plan file lists cut PRs as skips",
+			args: []string{"--limit", "1", "plan", "-o", "-"},
+			wantStdout: []string{
+				"pick #13 [ci]",
+				"skip #10 [patch] Bump lodash from 4.17.20 to 4.17.21  # beyond --limit 1\nskip #11 [minor] Bump axios from 1.6.0 to 1.7.0  # beyond --limit 1\nskip #14 [patch]",
+			},
+			wantAbsent: []string{"pick #10", "pick #11"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			operator := &fakeExecuteOperator{}
+			args := append([]string{"--repo", "owner/repo"}, test.args...)
+			run := runWithDeps(t, commandDeps{lister: planFileFixture(), operator: operator}, "", args...)
+			if run.err != nil {
+				t.Fatalf("Execute() error = %v", run.err)
+			}
+			for _, fragment := range test.wantStdout {
+				if !strings.Contains(run.stdout, fragment) {
+					t.Fatalf("stdout missing %q:\n%s", fragment, run.stdout)
+				}
+			}
+			for _, fragment := range test.wantAbsent {
+				if strings.Contains(run.stdout, fragment) {
+					t.Fatalf("stdout should not contain %q:\n%s", fragment, run.stdout)
+				}
+			}
+		})
+	}
 }

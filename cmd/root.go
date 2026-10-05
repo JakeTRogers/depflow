@@ -26,11 +26,19 @@ type repoResolver interface {
 	ResolveRepo(ctx context.Context) (string, error)
 }
 
+type alertLister interface {
+	ListOpenDependabotAlerts(ctx context.Context, repo string) ([]githubcli.DependabotAlert, error)
+}
+
 type commandDeps struct {
 	lister   prLister
 	operator prOperator
 	resolver repoResolver
 	editor   planEditor
+	// alerts reads Dependabot security alerts; nil leaves every PR's security status unknown.
+	alerts alertLister
+	// resumeDir is where execute writes a resume plan after stopping early; empty disables it.
+	resumeDir string
 }
 
 type commandOptions struct {
@@ -45,6 +53,7 @@ type commandOptions struct {
 	requireLabels       []string
 	excludeLabels       []string
 	skipGrouped         bool
+	securityOnly        bool
 }
 
 const defaultPullRequestLimit = 100
@@ -53,10 +62,12 @@ func defaultDeps() (commandDeps, error) {
 	client := githubcli.NewLazyClient()
 
 	return commandDeps{
-		lister:   client,
-		operator: client,
-		resolver: client,
-		editor:   newTerminalEditor(),
+		lister:    client,
+		operator:  client,
+		resolver:  client,
+		editor:    newTerminalEditor(),
+		alerts:    client,
+		resumeDir: os.TempDir(),
 	}, nil
 }
 
@@ -81,6 +92,7 @@ func newRootCommand(deps commandDeps) *cobra.Command {
 	cmd.PersistentFlags().StringSliceVar(&opts.requireLabels, "require-label", nil, "only include PRs that have all of these labels (repeatable or comma-separated)")
 	cmd.PersistentFlags().StringSliceVar(&opts.excludeLabels, "exclude-label", nil, "exclude PRs that have any of these labels (repeatable or comma-separated)")
 	cmd.PersistentFlags().BoolVar(&opts.skipGrouped, "skip-grouped", false, "exclude grouped Dependabot updates")
+	cmd.PersistentFlags().BoolVar(&opts.securityOnly, "security-only", false, "only include PRs that update a package with an open Dependabot security alert")
 
 	cmd.AddCommand(newScanCommand(deps, opts))
 	cmd.AddCommand(newPlanCommand(deps, opts))

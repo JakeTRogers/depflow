@@ -48,10 +48,14 @@ func Build(prs []dependabot.PR) Plan {
 	items := make([]PlannedPR, 0, len(prs))
 	for _, pr := range prs {
 		bucket := selectBucket(pr.Classification)
+		reason := buildReason(pr.Classification, bucket)
+		if security := pr.Classification.Security; security.Update {
+			reason += fmt.Sprintf("; fixes a %s-severity Dependabot alert", displaySeverity(security.Severity))
+		}
 		items = append(items, PlannedPR{
 			PR:     pr,
 			Bucket: bucket,
-			Reason: buildReason(pr.Classification, bucket),
+			Reason: reason,
 		})
 	}
 
@@ -63,6 +67,13 @@ func Build(prs []dependabot.PR) Plan {
 		rightBucketRank := bucketRank(right.Bucket)
 		if leftBucketRank != rightBucketRank {
 			return leftBucketRank < rightBucketRank
+		}
+
+		// Within a bucket, security updates go first, most severe first.
+		leftSecurityRank := securityRank(left.PR.Classification.Security)
+		rightSecurityRank := securityRank(right.PR.Classification.Security)
+		if leftSecurityRank != rightSecurityRank {
+			return leftSecurityRank < rightSecurityRank
 		}
 
 		leftChangeRank := changeKindRank(left.PR.Classification.ChangeKind)
@@ -169,6 +180,20 @@ func bucketRank(bucket Bucket) int {
 	}
 }
 
+func securityRank(security dependabot.SecurityStatus) int {
+	if !security.Update {
+		return dependabot.SeverityRank("") + 1
+	}
+	return dependabot.SeverityRank(security.Severity)
+}
+
+func displaySeverity(severity string) string {
+	if severity == "" {
+		return "unknown"
+	}
+	return severity
+}
+
 func changeKindRank(kind dependabot.ChangeKind) int {
 	switch kind {
 	case dependabot.ChangePatch:
@@ -203,6 +228,9 @@ func buildReason(classification dependabot.Classification, bucket Bucket) string
 	case BucketGrouped:
 		return "grouped update sorts after simple low-risk updates"
 	case BucketUnknown:
+		if classification.IsCommitUpdate() {
+			return fmt.Sprintf("commit update from %s to %s has no version impact; kept in the conservative unknown bucket", shortSHA(classification.PreviousVersion), shortSHA(classification.NextVersion))
+		}
 		return "insufficient metadata for a low-risk bucket; kept in the conservative unknown bucket"
 	case BucketInfraSensitive:
 		if len(classification.InfraSensitiveKeywords) > 0 {
@@ -220,4 +248,13 @@ func buildReason(classification dependabot.Classification, bucket Bucket) string
 	default:
 		return "deterministic tie-breakers applied"
 	}
+}
+
+// shortSHA abbreviates a full 40-character commit SHA to git's default seven characters and
+// leaves anything else, such as the version side of a mixed range, unchanged.
+func shortSHA(value string) string {
+	if len(value) == 40 {
+		return value[:7]
+	}
+	return value
 }

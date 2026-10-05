@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/JakeTRogers/depflow/internal/config"
@@ -30,7 +31,7 @@ var sleepFunc = func(ctx context.Context, delay time.Duration) error {
 type Operator interface {
 	ViewPullRequest(ctx context.Context, repo string, number int) (githubcli.PRDetail, error)
 	ApprovePullRequest(ctx context.Context, repo string, number int) error
-	MergePullRequest(ctx context.Context, repo string, number int, admin bool, method string) error
+	MergePullRequest(ctx context.Context, repo string, number int, admin bool, method, headSHA string) error
 	CheckMergeAllowed(ctx context.Context, repo string, number int, method string) error
 	CommentOnPR(ctx context.Context, repo string, number int, body string) error
 	ListWorkflowRuns(ctx context.Context, repo string, branch string) ([]githubcli.WorkflowRun, error)
@@ -50,14 +51,24 @@ func (nopProgress) Increment()       {}
 
 // Config controls executor admin override, polling, and timeout behavior.
 type Config struct {
-	MergeMethod      string
-	Admin            bool
-	PollInterval     time.Duration
-	CheckTimeout     time.Duration
+	MergeMethod  string
+	Admin        bool
+	PollInterval time.Duration
+	CheckTimeout time.Duration
+	// CheckGrace is how long a PR with no reported checks, or a just-updated branch, is given
+	// for GitHub to register checks before the reported state is trusted.
+	CheckGrace       time.Duration
 	PostMergeDelay   time.Duration
 	PostMergeTimeout time.Duration
-	ShowChecks       bool
-	ShowTiming       bool
+	// PostMergeGrace is how long to wait for a merge commit to start any workflow run before
+	// continuing with a warning, unless RequirePostMergeCI is set.
+	PostMergeGrace     time.Duration
+	RequirePostMergeCI bool
+	ShowChecks         bool
+	ShowTiming         bool
+	// SkipFailed sets aside a PR that fails for reasons of its own (see isPRLocalFailure) and
+	// continues with the next one instead of stopping.
+	SkipFailed bool
 }
 
 type prStatus string
@@ -74,6 +85,9 @@ type PRResult struct {
 	Status   prStatus
 	Error    error
 	Duration time.Duration
+	// Merged is true once the PR was merged, including when post-merge CI then failed and Status
+	// became failed.
+	Merged bool
 }
 
 // Result is the overall execution outcome.
@@ -92,7 +106,7 @@ func (r *Result) Merged() []PRResult {
 	return merged
 }
 
-// Failed returns the PR that caused a stop, if any.
+// Failed returns the first failed PR, if any. Without SkipFailed it is the PR that stopped the run.
 func (r *Result) Failed() *PRResult {
 	for _, pr := range r.Processed {
 		if pr.Status == statusFailed {
@@ -100,6 +114,29 @@ func (r *Result) Failed() *PRResult {
 		}
 	}
 	return nil
+}
+
+// FailedPRs returns every failed PR in processing order.
+func (r *Result) FailedPRs() []PRResult {
+	var failed []PRResult
+	for _, pr := range r.Processed {
+		if pr.Status == statusFailed {
+			failed = append(failed, pr)
+		}
+	}
+	return failed
+}
+
+// isPRLocalFailure reports whether err concerns only the PR being processed, so SkipFailed may
+// set it aside. Policy, permission, and API errors, and post-merge CI failures that leave the
+// base branch broken, still stop the run.
+func isPRLocalFailure(err error) bool {
+	for _, target := range []error{ErrCheckFailed, ErrCheckTimeout, ErrBranchUpdateTimeout, ErrBranchBehind, ErrHeadChanged, ErrMergeConflict} {
+		if errors.Is(err, target) {
+			return true
+		}
+	}
+	return false
 }
 
 func executionFailure(number int, err error) error {
@@ -133,6 +170,7 @@ func Run(ctx context.Context, op Operator, plan planner.Plan, repo string, cfg C
 			Status:   status,
 			Error:    err,
 			Duration: time.Since(itemStart),
+			Merged:   status == statusMerged,
 		})
 		progress.Increment()
 	}
@@ -168,6 +206,15 @@ func Run(ctx context.Context, op Operator, plan planner.Plan, repo string, cfg C
 		progress.Increment()
 	}
 
+	// setAside reports whether a recorded failure is skipped so the loop can continue.
+	setAside := func(item planner.PlannedPR, err error) bool {
+		if !cfg.SkipFailed || !isPRLocalFailure(err) {
+			return false
+		}
+		log.Warn("setting PR aside after failure", "number", item.PR.Number, "error", err)
+		return true
+	}
+
 	for i, item := range plan.Items {
 		itemStart = time.Now()
 		log.Info("processing PR", "step", i+1, "total", total, "number", item.PR.Number, "title", item.PR.Title)
@@ -196,7 +243,8 @@ func Run(ctx context.Context, op Operator, plan planner.Plan, repo string, cfg C
 			return result, fmt.Errorf("comparing branches for PR #%d: %w", item.PR.Number, err)
 		}
 
-		if comparison.BehindBy > 0 {
+		rebased := comparison.BehindBy > 0
+		if rebased {
 			log.Info("branch behind base, requesting rebase", "number", item.PR.Number, "behind_by", comparison.BehindBy)
 			progress.SetStatus(fmt.Sprintf("Requesting rebase for PR #%d", item.PR.Number))
 			if err := op.CommentOnPR(ctx, repo, item.PR.Number, "@dependabot rebase"); err != nil {
@@ -205,15 +253,21 @@ func Run(ctx context.Context, op Operator, plan planner.Plan, repo string, cfg C
 			}
 			if err := waitForBranchUpdate(ctx, op, repo, detail.BaseRefName, detail.HeadRefName, item.PR.Number, cfg, log, progress); err != nil {
 				record(item, statusFailed, err, fmt.Sprintf("Failed PR #%d", item.PR.Number))
+				if setAside(item, err) {
+					continue
+				}
 				return result, fmt.Errorf("waiting for rebase on PR #%d: %w", item.PR.Number, err)
 			}
 		}
 
-		cr, err := waitForChecks(ctx, op, repo, item.PR.Number, cfg, log, progress)
+		cr, err := waitForChecks(ctx, op, repo, item.PR.Number, rebased, cfg, log, progress)
 		if err != nil {
 			record(item, statusFailed, err, fmt.Sprintf("Failed PR #%d", item.PR.Number))
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				return result, err
+			}
+			if setAside(item, err) {
+				continue
 			}
 			return result, executionFailure(item.PR.Number, err)
 		}
@@ -231,9 +285,21 @@ func Run(ctx context.Context, op Operator, plan planner.Plan, repo string, cfg C
 			return result, fmt.Errorf("re-checking PR #%d before merge: %w", item.PR.Number, err)
 		}
 
+		if cr.HeadSHA != "" && detail.HeadRefOid != cr.HeadSHA {
+			headErr := fmt.Errorf("PR #%d: checks passed for %s but head is now %s: %w", item.PR.Number, cr.HeadSHA, detail.HeadRefOid, ErrHeadChanged)
+			record(item, statusFailed, headErr, fmt.Sprintf("Failed PR #%d: head changed", item.PR.Number))
+			if setAside(item, headErr) {
+				continue
+			}
+			return result, executionFailure(item.PR.Number, headErr)
+		}
+
 		if detail.Mergeable == "CONFLICTING" {
 			mergeErr := fmt.Errorf("PR #%d: %w", item.PR.Number, ErrMergeConflict)
 			record(item, statusFailed, mergeErr, fmt.Sprintf("Failed PR #%d: merge conflict", item.PR.Number))
+			if setAside(item, mergeErr) {
+				continue
+			}
 			return result, executionFailure(item.PR.Number, mergeErr)
 		}
 
@@ -243,8 +309,11 @@ func Run(ctx context.Context, op Operator, plan planner.Plan, repo string, cfg C
 			return result, fmt.Errorf("final branch comparison for PR #%d: %w", item.PR.Number, err)
 		}
 		if comparison.BehindBy > 0 {
-			mergeErr := fmt.Errorf("PR #%d: branch still %d commit(s) behind base after update", item.PR.Number, comparison.BehindBy)
+			mergeErr := fmt.Errorf("PR #%d: branch still %d commit(s) behind base after update: %w", item.PR.Number, comparison.BehindBy, ErrBranchBehind)
 			record(item, statusFailed, mergeErr, fmt.Sprintf("Failed PR #%d", item.PR.Number))
+			if setAside(item, mergeErr) {
+				continue
+			}
 			return result, executionFailure(item.PR.Number, mergeErr)
 		}
 
@@ -260,7 +329,7 @@ func Run(ctx context.Context, op Operator, plan planner.Plan, repo string, cfg C
 		}
 
 		progress.SetStatus(fmt.Sprintf("Merging PR #%d", item.PR.Number))
-		if err := op.MergePullRequest(ctx, repo, item.PR.Number, cfg.Admin, cfg.MergeMethod); err != nil {
+		if err := op.MergePullRequest(ctx, repo, item.PR.Number, cfg.Admin, cfg.MergeMethod, cr.HeadSHA); err != nil {
 			record(item, statusFailed, err, fmt.Sprintf("Failed PR #%d", item.PR.Number))
 			return result, fmt.Errorf("merging PR #%d: %w", item.PR.Number, err)
 		}
@@ -303,5 +372,12 @@ func Run(ctx context.Context, op Operator, plan planner.Plan, repo string, cfg C
 		}
 	}
 
+	if failed := result.FailedPRs(); len(failed) > 0 {
+		numbers := make([]string, 0, len(failed))
+		for _, pr := range failed {
+			numbers = append(numbers, fmt.Sprintf("#%d", pr.Item.PR.Number))
+		}
+		return result, fmt.Errorf("%d PR(s) set aside after failing: %s: %w", len(failed), strings.Join(numbers, ", "), ErrExecutionFailed)
+	}
 	return result, nil
 }

@@ -289,3 +289,62 @@ func TestPlanCommandInvalidChangeKindReturnsError(t *testing.T) {
 		t.Fatalf("error = %v, want invalid change-kind message", err)
 	}
 }
+
+func TestEcosystemFlagsWarnWhenNothingMatches(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		args       []string
+		wantStderr []string
+		wantPlan   string
+	}{
+		{
+			name:       "allow-list typo",
+			args:       []string{"--ecosystem", "npn", "plan"},
+			wantStderr: []string{`Warning: --ecosystem "npn" matches no open Dependabot PRs (ecosystems found: github-actions, npm-and-yarn)`},
+			wantPlan:   "Planned order for 0 Dependabot pull request(s)",
+		},
+		{
+			name:       "deny-list typo excludes nothing",
+			args:       []string{"--exclude-ecosystem", "github_action", "plan"},
+			wantStderr: []string{`Warning: --exclude-ecosystem "github_action" matches no open Dependabot PRs`},
+			wantPlan:   "#13",
+		},
+		{
+			name:     "dependabot.yml names match without warning",
+			args:     []string{"--ecosystem", "npm", "--exclude-ecosystem", "github_actions", "plan"},
+			wantPlan: "#10",
+		},
+		{
+			name:       "scan warns too",
+			args:       []string{"--ecosystem", "cargo", "scan"},
+			wantStderr: []string{`Warning: --ecosystem "cargo"`},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			run := runWithDeps(t, commandDeps{lister: planFileFixture()}, "", append([]string{"--repo", "owner/repo"}, test.args...)...)
+			if run.err != nil {
+				t.Fatalf("Execute() error = %v", run.err)
+			}
+			for _, fragment := range test.wantStderr {
+				if !strings.Contains(run.stderr, fragment) {
+					t.Fatalf("stderr missing %q:\n%s", fragment, run.stderr)
+				}
+			}
+			if len(test.wantStderr) == 0 && run.stderr != "" {
+				t.Fatalf("stderr = %q, want no warning", run.stderr)
+			}
+			if strings.Contains(run.stdout, "Warning") {
+				t.Fatalf("warning leaked to stdout:\n%s", run.stdout)
+			}
+			if test.wantPlan != "" && !strings.Contains(run.stdout, test.wantPlan) {
+				t.Fatalf("stdout missing %q:\n%s", test.wantPlan, run.stdout)
+			}
+		})
+	}
+}

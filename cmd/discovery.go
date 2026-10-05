@@ -2,12 +2,15 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 
 	"github.com/JakeTRogers/depflow/internal/dependabot"
 	"github.com/JakeTRogers/depflow/internal/githubcli"
+	"github.com/JakeTRogers/depflow/internal/planner"
 	"github.com/spf13/cobra"
 )
 
@@ -18,7 +21,7 @@ func discoverDependabotPRs(ctx context.Context, deps commandDeps, opts *commandO
 
 	prs, err := listOpenPullRequestsForDiscovery(ctx, deps, opts)
 	if err != nil {
-		if opts.repo == "" {
+		if opts.repo == "" && !errors.Is(err, githubcli.ErrAuthRequired) {
 			return nil, fmt.Errorf("discovering open pull requests: %w; %s", err, rerunWithRepoHint("if the current repository cannot be inferred"))
 		}
 		return nil, fmt.Errorf("discovering open pull requests: %w", err)
@@ -37,7 +40,55 @@ func discoverDependabotPRs(ctx context.Context, deps commandDeps, opts *commandO
 		return dependabotPRs[i].Number < dependabotPRs[j].Number
 	})
 
+	if err := markSecurityUpdates(ctx, deps, opts, dependabotPRs); err != nil {
+		return nil, err
+	}
+
 	return dependabotPRs, nil
+}
+
+// markSecurityUpdates records which PRs fix open Dependabot alerts. Alerts need extra access, so
+// when they cannot be read the PRs keep an unknown status, unless --security-only depends on it.
+func markSecurityUpdates(ctx context.Context, deps commandDeps, opts *commandOptions, prs []dependabot.PR) error {
+	if len(prs) == 0 {
+		return nil
+	}
+	if deps.alerts == nil {
+		if opts.securityOnly {
+			return errors.New("--security-only needs the repository's Dependabot alerts, but no alert source is configured")
+		}
+		return nil
+	}
+
+	raw, err := deps.alerts.ListOpenDependabotAlerts(ctx, opts.repo)
+	if err != nil {
+		if opts.securityOnly {
+			return fmt.Errorf("--security-only needs read access to the repository's Dependabot alerts: %w", err)
+		}
+		return nil
+	}
+
+	alerts := make([]dependabot.Alert, 0, len(raw))
+	for _, alert := range raw {
+		alerts = append(alerts, dependabot.Alert{Ecosystem: alert.Ecosystem, Package: alert.Package, Severity: alert.Severity})
+	}
+	dependabot.MarkSecurityUpdates(prs, alerts)
+	return nil
+}
+
+// securityLabel describes a PR's security status: its alert severity, "no", or "unknown" when
+// alerts could not be read.
+func securityLabel(status dependabot.SecurityStatus) string {
+	switch {
+	case !status.Checked:
+		return "unknown"
+	case !status.Update:
+		return "no"
+	case status.Severity == "":
+		return "yes"
+	default:
+		return sanitize(status.Severity)
+	}
 }
 
 // applyLimit caps prs to opts.limit. Callers apply this after classification filtering so
@@ -47,6 +98,66 @@ func applyLimit(prs []dependabot.PR, opts *commandOptions) []dependabot.PR {
 		return prs[:opts.limit]
 	}
 	return prs
+}
+
+// warnUnmatchedEcosystems flags --ecosystem and --exclude-ecosystem values that match none of the
+// discovered PRs, which usually means a typo; for an exclusion that means nothing was excluded.
+func warnUnmatchedEcosystems(writer io.Writer, prs []dependabot.PR, opts *commandOptions) error {
+	if len(prs) == 0 {
+		return nil
+	}
+
+	found := make(map[string]struct{}, len(prs))
+	for _, pr := range prs {
+		found[dependabot.NormalizeEcosystem(pr.Classification.Ecosystem)] = struct{}{}
+	}
+	names := make([]string, 0, len(found))
+	for name := range found {
+		names = append(names, displayOrUnknown(name))
+	}
+	sort.Strings(names)
+
+	for _, flag := range []struct {
+		name   string
+		values []string
+	}{
+		{name: "ecosystem", values: opts.ecosystems},
+		{name: "exclude-ecosystem", values: opts.excludeEcosystems},
+	} {
+		for _, value := range flag.values {
+			if _, ok := found[dependabot.NormalizeEcosystem(value)]; ok {
+				continue
+			}
+			if _, err := fmt.Fprintf(writer, "Warning: --%s %q matches no open Dependabot PRs (ecosystems found: %s)\n", flag.name, sanitize(value), sanitize(strings.Join(names, ", "))); err != nil {
+				return fmt.Errorf("writing ecosystem warning: %w", err)
+			}
+		}
+	}
+	return nil
+}
+
+// limitPlan keeps the first opts.limit items of an ordered plan, so --limit selects the PRs that
+// would be processed first, and returns the items it cut.
+func limitPlan(plan planner.Plan, opts *commandOptions) (planner.Plan, []planner.PlannedPR) {
+	if len(plan.Items) <= opts.limit {
+		return plan, nil
+	}
+	return planner.Plan{Items: plan.Items[:opts.limit:opts.limit]}, plan.Items[opts.limit:]
+}
+
+// limitReason explains why a PR cut by --limit was left out.
+func limitReason(opts *commandOptions) string {
+	return fmt.Sprintf("beyond --limit %d", opts.limit)
+}
+
+func writeLimitNotice(writer io.Writer, cut int, opts *commandOptions) error {
+	if cut == 0 {
+		return nil
+	}
+	if _, err := fmt.Fprintf(writer, "Not included: %d more eligible PR(s) %s\n", cut, limitReason(opts)); err != nil {
+		return fmt.Errorf("writing limit notice: %w", err)
+	}
+	return nil
 }
 
 func listOpenPullRequestsForDiscovery(ctx context.Context, deps commandDeps, opts *commandOptions) ([]githubcli.PullRequest, error) {
@@ -122,6 +233,7 @@ func buildFilterOptions(opts *commandOptions, changeKinds []dependabot.ChangeKin
 		RequireLabels:       opts.requireLabels,
 		ExcludeLabels:       opts.excludeLabels,
 		SkipGrouped:         opts.skipGrouped,
+		SecurityOnly:        opts.securityOnly,
 		IncludeDrafts:       includeDrafts,
 		ApplyDraftFilter:    applyDraftFilter,
 	}

@@ -10,11 +10,12 @@ By default, `plan` and `execute` exclude major version updates and draft PRs; us
 
 `scan`, `plan`, and `execute` share a set of classification-based filters built from the same signals shown by `scan` (ecosystem, dependency name, labels, grouping):
 
-- `--ecosystem` / `--exclude-ecosystem` — allow-list / deny-list by ecosystem (repeatable or comma-separated)
+- `--ecosystem` / `--exclude-ecosystem` — allow-list / deny-list by ecosystem (repeatable or comma-separated). Names are case-insensitive, `_` and `-` are interchangeable, and `dependabot.yml` names are accepted (`npm` for `npm-and-yarn`, `gomod` for `go-modules`, `mix` for `hex`, `gitsubmodule` for `submodules`). A value that matches no open Dependabot PR prints a warning on stderr listing the ecosystems found.
 - `--dependency` / `--exclude-dependency` — allow-list / deny-list by substring match against the dependency name (repeatable or comma-separated, case-insensitive)
 - `--require-label` — only include PRs that have **all** of the given labels (repeatable or comma-separated)
 - `--exclude-label` — exclude PRs that have **any** of the given labels (repeatable or comma-separated)
 - `--skip-grouped` — exclude grouped Dependabot updates
+- `--security-only` — only include PRs that update a package with an open Dependabot security alert; fails if the alerts cannot be read (see [Security updates](#security-updates))
 
 These default to no restriction (everything passes) and apply identically across all three commands, so you can preview a filtered subset with `scan`/`plan` before running the same filters through `execute`.
 
@@ -27,18 +28,27 @@ PRs excluded by any filter are listed with their specific reason under an `Exclu
 
 ### scan
 
-Lists open Dependabot pull requests with metadata including classification signals: ecosystem, change kind, grouping, developer tooling, and infrastructure sensitivity.
+Lists open Dependabot pull requests with metadata including classification signals: ecosystem, change kind, grouping, developer tooling, infrastructure sensitivity, and security.
 
-Developer-tooling and infrastructure-sensitive hints use keywords from the dependency name parsed from the PR title, or the lead dependency of a grouped update. Project paths, labels, group names, and other title text do not set these hints. When the name can only be inferred from a branch, it is still displayed but does not contribute risk hints. These are keyword heuristics, not a complete assessment of dependency risk, and apply to `scan`, `plan`, and `execute` alike.
+### Security updates
+
+depflow reads the repository's open Dependabot alerts once per run and marks a PR as a security update when it updates a package with an open alert: the dependency in its title, or any package in a grouped update's list. Package names match case-insensitively (Python names per PEP 503), and the alert's ecosystem must agree with the PR's. Alerts are not matched by manifest directory, so in a monorepo an update in one directory can match an alert raised for another.
+
+The signal appears as `security=<severity>`, `security=no`, or `security=unknown` in `scan` and `plan --details`. The compact plan table adds a `SECURITY` column when any listed PR is a security update, and plan files note `# security: <severity>` on those lines. Within each bucket, security updates are processed first, most severe first; they do not move ahead of lower-risk buckets.
+
+Reading alerts requires access to them (repository admins and users granted security-alert access; fine-grained tokens need the Dependabot alerts read permission). Without it, every PR shows `security=unknown` and nothing else changes, except that `--security-only` fails rather than guessing.
+
+Developer-tooling and infrastructure-sensitive hints use keywords from the dependency name parsed from the PR title, or the lead dependency of a grouped update. Keywords match whole name segments split on punctuation, so `@aws-sdk/client-s3` matches `aws` but `drawsvg` does not. Project paths, labels, group names, and other title text do not set these hints. When the name can only be inferred from a branch, it is still displayed but does not contribute risk hints. These are keyword heuristics, not a complete assessment of dependency risk, and apply to `scan`, `plan`, and `execute` alike.
 
 ### plan
 
-Shows deterministic classification and the preferred processing order. By default, `plan` excludes major version updates and drafts from the planned queue and lists them separately under `Excluded by filters` along with the reason each was excluded. Grouped summary PRs are also treated as major when their PR body contains a major version bump. Included PRs are sorted into buckets — ci, developer-tooling, patch, minor, grouped, unknown, infra-sensitive, major — so that lower-risk updates are processed first.
+Shows deterministic classification and the preferred processing order. By default, `plan` excludes major version updates and drafts from the planned queue and lists them separately under `Excluded by filters` along with the reason each was excluded. Grouped summary PRs are also treated as major when the update list in their PR body (Dependabot's `Updates ... from A to B` lines and `Package | From | To` table) contains a major version bump; versions mentioned in bundled release notes and changelogs are ignored. Included PRs are sorted into buckets — ci, developer-tooling, patch, minor, grouped, unknown, infra-sensitive, major — so that lower-risk updates are processed first.
 
-The default listing is a compact table with execution order, PR number, bucket, ecosystem, dependency, and change kind. Every PR has its own row in processing order. Missing values appear as `unknown`; when no dependency name is available, the title is shown instead. Long identifiers are preserved rather than truncated.
+The default listing is a compact table with execution order, PR number, bucket, ecosystem, dependency, and change kind, plus a security column when any listed PR is a [security update](#security-updates). Every PR has its own row in processing order. Missing values appear as `unknown`; when no dependency name is available, the title is shown instead. Long identifiers are preserved rather than truncated.
 
 - `--details`: show full titles, classification signals, reasons, and URLs instead of the compact table
 - `-o, --output FILE` — write an [editable plan file](#editing-the-plan) instead of the listing (`-` writes it to stdout); cannot be combined with `--details`
+- `--force` — overwrite an existing `--output` file; without it, `plan -o` refuses to replace a file so an edited plan is not lost
 
 ```bash
 depflow plan
@@ -51,12 +61,14 @@ Processes Dependabot PRs in planned order with a live progress display. By defau
 
 - Inspects PR state and branch comparison
 - Posts a `@dependabot rebase` comment and polls until the branch is updated if it is behind base
-- Waits for CI checks to pass by polling the status check rollup
-- Re-checks mergeability and branch state before merge
+- Waits for CI checks to pass by polling the status check rollup. GitHub registers checks for a new commit asynchronously, so a PR that reports no checks is given a 30-second grace period from when its head commit is first observed before depflow treats it as having no CI. The grace period restarts whenever the observed head changes; after a rebase or an observed head change, passing checks are not trusted until it has elapsed
+- Re-checks mergeability and branch state before merge, and stops if the head commit changed after its checks passed
 - Submits an approval review immediately before merge
-- Merges the PR using the selected method and deletes the head branch
-- Waits for post-merge CI for the merged commit on the base branch before proceeding to the next PR
-- Stops on first failure (no retry or skip mode) and exits non-zero if any PR fails to process
+- Merges the PR using the selected method, pinned to the verified head commit (`gh pr merge --match-head-commit`), and deletes the head branch
+- Waits for post-merge CI for the merged commit on the base branch before proceeding to the next PR. GitHub-managed `dynamic` runs, such as Dependabot's own update jobs, are not treated as CI. If the merge commit starts no runs within 2 minutes (for example, because path filters skipped every workflow), depflow logs a warning and continues unless `--require-post-merge-ci` is set. This grace period applies even when recent run history contains no push-triggered runs, since that does not prove push workflows are absent
+- Stops on first failure and exits non-zero if any PR fails to process. With `--skip-failed`, a PR that fails for reasons of its own (failed or timed-out checks, a merge conflict, a rebase that never lands, a branch still behind, or a head commit that moved after CI) is set aside and the run continues; post-merge CI failures, merge-policy, approval, and merge rejections, API errors, and interrupts still stop it. The run still exits non-zero when any PR was set aside
+
+When execution stops early, whether from a failure or `SIGINT`/`SIGTERM`, the summary lists the PRs that were not attempted, and depflow writes a resume plan file to the system temporary directory. The file lists, in their original order, every PR that failed without merging (the one that stopped execution, or each one `--skip-failed` set aside) and every PR that was not attempted. It is also written after a `--skip-failed` run that set PRs aside, so they can be retried later. The printed `depflow execute --plan FILE` command repeats the `--repo`, `--config`, verbosity, merge-method, `--admin`, `--skip-failed`, timing, and CI flags you set, so the resumed run behaves the same way. On Windows, the hint explicitly targets PowerShell and quotes paths and flag values for that shell; elsewhere it uses POSIX shell syntax. Change a failed PR's line to `skip` to leave it out.
 
 Without `--admin`, any failed pre-merge check stops execution. With `--admin`, depflow waits for all pre-merge checks to reach a terminal state, logs a summary warning plus one warning per failed check, then continues with approval and an admin merge. The flag is forwarded as `gh pr merge --admin`, which bypasses branch protection rules. Because GitHub's status-check metadata does not distinguish policy gates from ordinary test failures, `--admin` bypasses all failed pre-merge checks. These admin-bypass warnings are emitted at warn level, so they remain visible even without `-v`.
 
@@ -76,6 +88,8 @@ If the process receives `SIGINT` or `SIGTERM`, depflow cancels the active execut
 - `--check-timeout` — maximum wait for CI checks per PR (default: 30m, must be greater than `--poll-interval`)
 - `--post-merge-delay` — delay before checking post-merge CI (default: 10s)
 - `--post-merge-timeout` — maximum wait for post-merge CI (default: 30m, must be greater than `--poll-interval`)
+- `--require-post-merge-ci` — fail when a merge commit starts no workflow runs, instead of continuing with a warning
+- `--skip-failed` — set aside a PR whose checks fail or time out, or that conflicts or cannot be rebased, and continue with the rest
 - `--show-checks` — show per-check pass/pending/fail detail on the progress line while waiting for CI, post-merge CI, and branch updates
 - `--show-timing` — show elapsed wait time on the progress line and per-PR duration in the execution summary
 
@@ -179,15 +193,16 @@ pick #31 [ci] Bump actions/checkout from 7.0.0 to 7.0.1
 pick #28 [patch] Bump golang.org/x/sys from 0.46.0 to 0.47.0
 pick #22 [minor] Bump github.com/spf13/cobra from 1.9.0 to 1.10.2
 
-# Excluded by default filters. Change "skip" to "pick" to include:
+# Not included by default. Change "skip" to "pick" to include:
 skip #40 [major] Bump foo from 1.4.0 to 2.0.0  # change-kind "major" not in --change-kind allow-list
 ```
 
-- PRs run in the order of their `pick` lines. The command and PR number control execution. The optional bucket is parsed as metadata for bucket-drift warnings, while the title is informational; changing the bucket does not change execution order.
-- PRs held back only by the default `--change-kind` and draft filters are listed as `skip` lines so you can include them. PRs removed by filters you pass explicitly (for example `--exclude-ecosystem npm-and-yarn` or `--change-kind patch`) are left out of the file.
+- PRs run in the order of their `pick` lines. The command and PR number control execution. The optional bucket records what the PR was when planned and is checked for drift (see below), while the title is informational; changing the bucket does not change execution order.
+- PRs held back only by the default `--change-kind` and draft filters, or cut by `--limit`, are listed as `skip` lines so you can include them. PRs removed by filters you pass explicitly (for example `--exclude-ecosystem npm-and-yarn` or `--change-kind patch`) are left out of the file.
 - Before anything is changed, every picked PR is checked against the currently open Dependabot PRs. Picks that aren't open Dependabot PRs (merged since the plan was written, or never from Dependabot) are reported under `Not processed` and skipped, so a stale or hand-edited plan can never merge anything else.
 - The `repo` line must match the target repository (`--repo`, or the one `gh` infers).
-- When running a saved plan, depflow warns if a PR's bucket has changed since the plan was written (for example, Dependabot moved it to a new major version) and reports how many open Dependabot PRs the file doesn't list. Those PRs are left alone.
+- When running a plan, depflow warns if a PR's bucket has changed since the plan was written. A pick that has become `[major]` (for example, Dependabot moved it to a new major version) is not processed and is reported under `Not processed`; change its bucket to `[major]` in the plan file to include it anyway. A `pick` line with no bucket is not checked.
+- When running a saved plan, depflow also reports how many open Dependabot PRs the file doesn't list. Those PRs are left alone.
 - The editor is `$VISUAL`, then `$EDITOR`, then `vi` (`notepad` on Windows). Exiting the editor with an error aborts. If the edited plan can't be parsed, depflow keeps the file and prints its path so you can fix it and rerun with `--plan`.
 - `--edit` needs an interactive terminal. In scripts, use `plan -o` and `execute --plan`.
 
@@ -203,9 +218,9 @@ depflow 0.1.0 (linux/amd64)
 
 - `--config PATH` — use an explicit YAML preferences file instead of the user default
 - `--repo [HOST/]OWNER/REPO` — target an explicit GitHub repository; if omitted, `gh` attempts to infer the current repository and `execute` resolves that repo before mutating operations
-- `--limit N` — maximum number of eligible Dependabot pull requests to return after classification filtering (default: 100). Discovery expands the underlying open-PR query as needed, capped at 1000 pull requests, so PRs filtered out do not count against the limit.
+- `--limit N` — maximum number of eligible Dependabot pull requests to return after classification filtering (default: 100). Discovery expands the underlying open-PR query as needed, capped at 1000 pull requests, so PRs filtered out do not count against the limit. `plan` and `execute` keep the first N PRs in processing order and report how many more were cut; plan files list the cut PRs as `skip` lines. `scan` keeps the first N by PR number.
 - `-v, --verbose` — increase execute log verbosity (`-v` for info, `-vv` for debug, `-vvv` for trace)
-- `--ecosystem`, `--exclude-ecosystem`, `--dependency`, `--exclude-dependency`, `--require-label`, `--exclude-label`, `--skip-grouped` — see [Filtering](#filtering); shared by `scan`, `plan`, and `execute`
+- `--ecosystem`, `--exclude-ecosystem`, `--dependency`, `--exclude-dependency`, `--require-label`, `--exclude-label`, `--skip-grouped`, `--security-only` — see [Filtering](#filtering); shared by `scan`, `plan`, and `execute`
 
 ## Output Conventions
 

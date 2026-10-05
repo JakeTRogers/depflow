@@ -16,6 +16,7 @@ type FilterOptions struct {
 	RequireLabels       []string
 	ExcludeLabels       []string
 	SkipGrouped         bool
+	SecurityOnly        bool
 	IncludeDrafts       bool
 	ApplyDraftFilter    bool
 }
@@ -52,11 +53,11 @@ func exclusionReason(pr PR, opts FilterOptions) (string, bool) {
 		}
 	}
 
-	ecosystem := strings.ToLower(pr.Classification.Ecosystem)
-	if matchesAny(ecosystem, opts.ExcludeEcosystems) {
+	ecosystem := NormalizeEcosystem(pr.Classification.Ecosystem)
+	if matchesAnyEcosystem(ecosystem, opts.ExcludeEcosystems) {
 		return fmt.Sprintf("ecosystem %q excluded by --exclude-ecosystem", pr.Classification.Ecosystem), true
 	}
-	if len(opts.Ecosystems) > 0 && !matchesAny(ecosystem, opts.Ecosystems) {
+	if len(opts.Ecosystems) > 0 && !matchesAnyEcosystem(ecosystem, opts.Ecosystems) {
 		return fmt.Sprintf("ecosystem %q not in --ecosystem allow-list", pr.Classification.Ecosystem), true
 	}
 
@@ -79,6 +80,10 @@ func exclusionReason(pr PR, opts FilterOptions) (string, bool) {
 		return "grouped update excluded by --skip-grouped", true
 	}
 
+	if opts.SecurityOnly && !pr.Classification.Security.Update {
+		return "not a security update (--security-only)", true
+	}
+
 	return "", false
 }
 
@@ -91,9 +96,32 @@ func containsChangeKind(kinds []ChangeKind, kind ChangeKind) bool {
 	return false
 }
 
-func matchesAny(value string, candidates []string) bool {
+// ecosystemAliases maps dependabot.yml package-ecosystem names to the names Dependabot uses in
+// its branch names, which is where PR ecosystems are read from.
+var ecosystemAliases = map[string]string{
+	"actions":      "github-actions",
+	"go":           "go-modules",
+	"gomod":        "go-modules",
+	"gitsubmodule": "submodules",
+	"mix":          "hex",
+	"npm":          "npm-and-yarn",
+	"pnpm":         "npm-and-yarn",
+	"yarn":         "npm-and-yarn",
+}
+
+// NormalizeEcosystem returns the canonical form of an ecosystem name, so "go_modules", "gomod",
+// and "Go-Modules" all compare equal to the "go-modules" ecosystem of a Dependabot branch.
+func NormalizeEcosystem(value string) string {
+	normalized := strings.ReplaceAll(strings.ToLower(strings.TrimSpace(value)), "_", "-")
+	if alias, ok := ecosystemAliases[normalized]; ok {
+		return alias
+	}
+	return normalized
+}
+
+func matchesAnyEcosystem(ecosystem string, candidates []string) bool {
 	for _, c := range candidates {
-		if value == strings.ToLower(strings.TrimSpace(c)) {
+		if ecosystem == NormalizeEcosystem(c) {
 			return true
 		}
 	}

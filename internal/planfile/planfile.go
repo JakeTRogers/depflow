@@ -90,7 +90,7 @@ func Write(w io.Writer, repo string, generated time.Time, picks []planner.Planne
 	}
 
 	if len(skips) > 0 {
-		builder.WriteString("\n# Excluded by default filters. Change \"skip\" to \"pick\" to include:\n")
+		builder.WriteString("\n# Not included by default. Change \"skip\" to \"pick\" to include:\n")
 	}
 	for _, skipped := range skips {
 		writeLine(&builder, ActionSkip, skipped.Item, skipped.Reason)
@@ -104,6 +104,13 @@ func Write(w io.Writer, repo string, generated time.Time, picks []planner.Planne
 
 func writeLine(builder *strings.Builder, action Action, item planner.PlannedPR, note string) {
 	fmt.Fprintf(builder, "%s #%d [%s] %s", action, item.PR.Number, item.Bucket, oneLine(item.PR.Title))
+	if security := item.PR.Classification.Security; security.Update {
+		severity := security.Severity
+		if severity == "" {
+			severity = "unknown severity"
+		}
+		note = strings.TrimPrefix(note+"; security: "+severity, "; ")
+	}
 	if note = oneLine(note); note != "" {
 		fmt.Fprintf(builder, "  # %s", note)
 	}

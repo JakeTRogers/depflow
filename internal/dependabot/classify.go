@@ -4,6 +4,7 @@ package dependabot
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -25,13 +26,17 @@ const (
 
 // Classification contains the milestone-1 signals used by the planner.
 type Classification struct {
-	Ecosystem               string
-	DependencyName          string
+	Ecosystem      string
+	DependencyName string
+	// Dependencies lists every package the PR updates: the title's dependency, or for a grouped
+	// update the packages in Dependabot's update list.
+	Dependencies            []string
 	PreviousVersion         string
 	NextVersion             string
 	ChangeKind              ChangeKind
 	ContainsMajorUpdate     bool
 	Grouped                 bool
+	Security                SecurityStatus
 	CI                      bool
 	DeveloperTooling        bool
 	InfrastructureSensitive bool
@@ -40,13 +45,22 @@ type Classification struct {
 }
 
 var (
-	fromToPattern                 = regexp.MustCompile(`(?i)\bfrom\s+([^\s]+)\s+to\s+([^\s]+)\b`)
+	// Requirement updates prefix versions with operators, e.g. "from >=7.4 to >=8.1" or
+	// Bundler's "from ~> 6.1 to ~> 7.0", so an operator and the space after it belong to the version.
+	fromToPattern                 = regexp.MustCompile(`(?i)\bfrom\s+((?:[<>=~^!]+\s*)?[^\s]+)\s+to\s+((?:[<>=~^!]+\s*)?[^\s]+)\b`)
 	bumpTitlePattern              = regexp.MustCompile(`(?i)^bump\s+(.+?)\s+from\b`)
+	requirementTitlePattern       = regexp.MustCompile(`(?i)^update\s+(.+?)\s+requirement\s+from\b`)
 	groupedDependencyTitlePattern = regexp.MustCompile(`(?i)^bump\s+(.+?)(?:\s+from\s+[^\s]+\s+to\s+[^\s]+)?\s+in\s+(?:the\s+)?(.+?)\s+group\b`)
 	groupedSummaryTitlePattern    = regexp.MustCompile(`(?i)^bump\s+(?:the\s+)?(.+?)\s+group\b`)
-	conventionalCommitPattern     = regexp.MustCompile(`^[a-z]+(?:\([^)]+\))?!?:\s*`)
+	conventionalCommitPattern     = regexp.MustCompile(`(?i)^[a-z][a-z0-9-]*(?:\([^)]*\))*!?:\s*`) // scopes may repeat: "deps(rust)(deps): "
 	versionPattern                = regexp.MustCompile(`(?i)^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?`)
+	commitSHAPattern              = regexp.MustCompile(`(?i)^[0-9a-f]{7,40}$`)
 	headVersionPattern            = regexp.MustCompile(`-(v?\d+(?:\.\d+){0,2}[^/]*)$`)
+	keywordSeparatorPattern       = regexp.MustCompile(`[^a-z0-9]+`)
+	// Dependabot lists a group's updates as "Updates `name` from A to B" lines and, for larger
+	// groups, a "| Package | From | To |" table whose versions are code spans.
+	groupedUpdateLinePattern = regexp.MustCompile("(?im)^updates\\s+`([^`]+)`\\s+from\\s+((?:[<>=~^!]+\\s*)?\\S+)\\s+to\\s+((?:[<>=~^!]+\\s*)?\\S+)")
+	groupedUpdateRowPattern  = regexp.MustCompile("(?m)^\\|\\s*(?:\\[([^\\]\\n]+)\\]\\([^)\\n]*\\)|([^|\\n]*?))\\s*\\|\\s*`([^`]+)`\\s*\\|\\s*`([^`]+)`\\s*\\|")
 
 	canonicalDependabotAuthors = map[string]struct{}{
 		"app/dependabot":          {},
@@ -87,8 +101,11 @@ var (
 		"aks",
 		"ansible",
 		"aws",
+		"awscli",
+		"awssdk",
 		"azure",
 		"container",
+		"containerd",
 		"docker",
 		"eks",
 		"gcp",
@@ -130,6 +147,18 @@ func (c Classification) HasMajorVersionBump() bool {
 	return c.ChangeKind == ChangeMajor || c.ContainsMajorUpdate
 }
 
+// IsCommitUpdate reports whether the PR moves between commit SHAs rather than versions.
+func (c Classification) IsCommitUpdate() bool {
+	return isCommitSHA(c.PreviousVersion) || isCommitSHA(c.NextVersion)
+}
+
+// isCommitSHA reports whether value looks like an abbreviated or full git commit SHA. All-digit
+// values are treated as versions (for example CalVer), so at least one hex letter is required.
+func isCommitSHA(value string) bool {
+	value = strings.TrimSpace(value)
+	return commitSHAPattern.MatchString(value) && strings.ContainsAny(strings.ToLower(value), "abcdef")
+}
+
 // EffectiveChangeKind returns the change kind used for filtering, bucketing, and display.
 // Grouped PRs whose body contains a major version bump report as ChangeMajor even when the
 // PR's own title has no parseable "from X to Y" version range (ChangeKind would otherwise be
@@ -164,8 +193,10 @@ func classify(title, body, headRef string, labels []string) Classification {
 	changeKind := inferChangeKind(previousVersion, nextVersion)
 	grouped := inferGrouped(title, headRef, labels)
 	containsMajorUpdate := false
+	dependencies := []string{dependencyName}
 	if grouped {
 		containsMajorUpdate = containsGroupedMajorUpdate(body)
+		dependencies = groupedDependencies(title, body)
 	}
 	signalText := dependencySignalText(title)
 	devMatches := matchKeywords(signalText, devToolingKeywords)
@@ -174,6 +205,7 @@ func classify(title, body, headRef string, labels []string) Classification {
 	return Classification{
 		Ecosystem:               ecosystem,
 		DependencyName:          dependencyName,
+		Dependencies:            dependencies,
 		PreviousVersion:         previousVersion,
 		NextVersion:             nextVersion,
 		ChangeKind:              changeKind,
@@ -211,9 +243,8 @@ func inferDependencyName(title, headRef, ecosystem string) string {
 		return match.displayName()
 	}
 
-	normalizedTitle := stripConventionalCommitPrefix(title)
-	if matches := bumpTitlePattern.FindStringSubmatch(normalizedTitle); len(matches) == 2 {
-		return strings.TrimSpace(matches[1])
+	if name, ok := singleDependencyName(title); ok {
+		return name
 	}
 
 	trimmedHeadRef := strings.TrimSpace(headRef)
@@ -229,6 +260,18 @@ func inferDependencyName(title, headRef, ecosystem string) string {
 	}
 
 	return strings.TrimSpace(headVersionPattern.ReplaceAllString(remainder, ""))
+}
+
+// singleDependencyName extracts the dependency from "bump X from ..." and
+// "update X requirement from ..." titles.
+func singleDependencyName(title string) (string, bool) {
+	normalizedTitle := stripConventionalCommitPrefix(title)
+	for _, pattern := range []*regexp.Regexp{bumpTitlePattern, requirementTitlePattern} {
+		if matches := pattern.FindStringSubmatch(normalizedTitle); len(matches) == 2 {
+			return strings.TrimSpace(matches[1]), true
+		}
+	}
+	return "", false
 }
 
 func inferVersionRange(title string) (string, string) {
@@ -284,7 +327,8 @@ func stripConventionalCommitPrefix(title string) string {
 	}
 
 	remainder := strings.TrimSpace(strings.TrimPrefix(trimmedTitle, prefix))
-	if !strings.HasPrefix(strings.ToLower(remainder), "bump ") {
+	lowerRemainder := strings.ToLower(remainder)
+	if !strings.HasPrefix(lowerRemainder, "bump ") && !strings.HasPrefix(lowerRemainder, "update ") {
 		return trimmedTitle
 	}
 
@@ -311,17 +355,27 @@ func dependencySignalText(title string) string {
 	if match, ok := parseGroupedTitle(title); ok {
 		return strings.ToLower(match.leadDependency)
 	}
-	if matches := bumpTitlePattern.FindStringSubmatch(stripConventionalCommitPrefix(title)); len(matches) == 2 {
-		return strings.ToLower(strings.TrimSpace(matches[1]))
+	if name, ok := singleDependencyName(title); ok {
+		return strings.ToLower(name)
 	}
 	return ""
 }
 
+// keywordTokens splits text into lowercase alphanumeric segments, so "@aws-sdk/client-s3" becomes
+// [aws sdk client s3].
+func keywordTokens(text string) []string {
+	return strings.Fields(keywordSeparatorPattern.ReplaceAllString(strings.ToLower(text), " "))
+}
+
+// matchKeywords returns the keywords whose segments appear consecutively among the segments of
+// signalText. Matching whole segments keeps "oci" from matching "social" and "tox" from matching
+// "toxiproxy", while multi-segment keywords such as "golangci-lint" still match.
 func matchKeywords(signalText string, keywords []string) []string {
+	tokens := keywordTokens(signalText)
 	matches := make([]string, 0, len(keywords))
 	seen := make(map[string]struct{}, len(keywords))
 	for _, keyword := range keywords {
-		if !strings.Contains(signalText, keyword) {
+		if !containsTokenSequence(tokens, keywordTokens(keyword)) {
 			continue
 		}
 		if _, ok := seen[keyword]; ok {
@@ -335,7 +389,24 @@ func matchKeywords(signalText string, keywords []string) []string {
 	return matches
 }
 
+func containsTokenSequence(tokens, sequence []string) bool {
+	if len(sequence) == 0 {
+		return false
+	}
+	for start := 0; start+len(sequence) <= len(tokens); start++ {
+		if slices.Equal(tokens[start:start+len(sequence)], sequence) {
+			return true
+		}
+	}
+	return false
+}
+
 func inferChangeKind(previousVersion, nextVersion string) ChangeKind {
+	// A SHA's leading digits are not a version, e.g. 08eba0b -> 34e1148 is not "major 8 -> 34".
+	if isCommitSHA(previousVersion) || isCommitSHA(nextVersion) {
+		return ChangeUnknown
+	}
+
 	fromVersion, ok := parseSemanticVersion(previousVersion)
 	if !ok {
 		return ChangeUnknown
@@ -358,13 +429,12 @@ func inferChangeKind(previousVersion, nextVersion string) ChangeKind {
 	}
 }
 
+// containsGroupedMajorUpdate reports whether a grouped PR body lists a major update. Only
+// Dependabot's own update lines and table rows are read, so "from X to Y" text quoted in release
+// notes or changelogs is ignored, including when no update list is recognized.
 func containsGroupedMajorUpdate(body string) bool {
-	matches := fromToPattern.FindAllStringSubmatch(strings.TrimSpace(body), -1)
-	for _, match := range matches {
-		if len(match) != 3 {
-			continue
-		}
-		if inferChangeKind(match[1], match[2]) == ChangeMajor {
+	for _, update := range groupedBodyUpdates(body) {
+		if inferChangeKind(update.from, update.to) == ChangeMajor {
 			return true
 		}
 	}
@@ -372,8 +442,56 @@ func containsGroupedMajorUpdate(body string) bool {
 	return false
 }
 
+type bodyUpdate struct {
+	name string
+	from string
+	to   string
+}
+
+// groupedBodyUpdates reads Dependabot's update lines and table rows from a grouped PR body.
+func groupedBodyUpdates(body string) []bodyUpdate {
+	body = strings.TrimSpace(body)
+	var updates []bodyUpdate
+	for _, match := range groupedUpdateLinePattern.FindAllStringSubmatch(body, -1) {
+		updates = append(updates, bodyUpdate{name: match[1], from: match[2], to: match[3]})
+	}
+	for _, match := range groupedUpdateRowPattern.FindAllStringSubmatch(body, -1) {
+		name := match[1]
+		if name == "" {
+			name = match[2]
+		}
+		updates = append(updates, bodyUpdate{name: name, from: match[3], to: match[4]})
+	}
+	return updates
+}
+
+// groupedDependencies returns the distinct packages a grouped PR updates, starting with the lead
+// dependency named in its title.
+func groupedDependencies(title, body string) []string {
+	var names []string
+	seen := make(map[string]struct{})
+	add := func(name string) {
+		name = strings.TrimSpace(name)
+		key := strings.ToLower(name)
+		if _, ok := seen[key]; ok || name == "" {
+			return
+		}
+		seen[key] = struct{}{}
+		names = append(names, name)
+	}
+	if match, ok := parseGroupedTitle(title); ok {
+		add(match.leadDependency)
+	}
+	for _, update := range groupedBodyUpdates(body) {
+		add(update.name)
+	}
+	return names
+}
+
+// parseSemanticVersion parses the leading version of value, ignoring requirement operators such as
+// ">=", "~=", "^", or "~>".
 func parseSemanticVersion(value string) (semanticVersion, bool) {
-	matches := versionPattern.FindStringSubmatch(strings.TrimSpace(value))
+	matches := versionPattern.FindStringSubmatch(strings.TrimLeft(strings.TrimSpace(value), "<>=~^! "))
 	if len(matches) == 0 {
 		return semanticVersion{}, false
 	}

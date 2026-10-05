@@ -17,7 +17,7 @@ import (
 
 const (
 	noPickLinesMessage     = "Nothing to do: plan has no pick lines."
-	noOpenPickedPRsMessage = "Nothing to do: none of the picked PRs are open Dependabot PRs."
+	noOpenPickedPRsMessage = "Nothing to do: none of the picked PRs can be processed."
 )
 
 // planFileConflictingFlags shape which PRs a generated plan contains, so they have no meaning
@@ -31,6 +31,7 @@ var planFileConflictingFlags = []string{
 	"require-label",
 	"exclude-label",
 	"skip-grouped",
+	"security-only",
 	"change-kind",
 	"include-drafts",
 }
@@ -53,13 +54,13 @@ func (c planFileContents) empty() bool {
 	return len(c.picks) == 0 && len(c.skips) == 0
 }
 
-// buildPlanFileContents plans prs with the user's filters. PRs held back only by the default
-// change-kind or draft filters become skip lines so an explicit edit can include them; PRs
-// excluded by filters the user typed are left out of the file entirely.
+// buildPlanFileContents plans prs with the user's filters. PRs cut by --limit, or held back only
+// by the default change-kind or draft filters, become skip lines so an explicit edit can include
+// them; PRs excluded by filters the user typed are left out of the file entirely.
 func buildPlanFileContents(cmd *cobra.Command, prs []dependabot.PR, opts *commandOptions, changeKinds []dependabot.ChangeKind, includeDrafts bool) planFileContents {
 	filterOpts := buildFilterOptions(opts, changeKinds, includeDrafts, true)
 	included, excluded := dependabot.Filter(prs, filterOpts)
-	included = applyLimit(included, opts)
+	planned, overLimit := limitPlan(planner.Build(included), opts)
 
 	candidateOpts := filterOpts
 	if !cmd.Flags().Changed("change-kind") {
@@ -83,12 +84,15 @@ func buildPlanFileContents(cmd *cobra.Command, prs []dependabot.PR, opts *comman
 	}
 
 	skipPlan := planner.Build(skipPRs)
-	skips := make([]planfile.Skipped, 0, len(skipPlan.Items))
+	skips := make([]planfile.Skipped, 0, len(overLimit)+len(skipPlan.Items))
+	for _, item := range overLimit {
+		skips = append(skips, planfile.Skipped{Item: item, Reason: limitReason(opts)})
+	}
 	for _, item := range skipPlan.Items {
 		skips = append(skips, planfile.Skipped{Item: item, Reason: reasons[item.PR.Number]})
 	}
 
-	return planFileContents{picks: planner.Build(included).Items, skips: skips}
+	return planFileContents{picks: planned.Items, skips: skips}
 }
 
 type bucketDrift struct {
@@ -98,10 +102,14 @@ type bucketDrift struct {
 }
 
 type planFileResolution struct {
-	plan     planner.Plan
-	picked   int
-	dropped  []int
-	drifted  []bucketDrift
+	plan    planner.Plan
+	picked  int
+	dropped []int
+	drifted []bucketDrift
+	// blocked lists picks that became major updates after the plan was written. They are not
+	// processed unless the file records them as [major], so a new major bump is never merged on
+	// the strength of an approval given to a smaller one.
+	blocked  []bucketDrift
 	unlisted int
 }
 
@@ -133,12 +141,20 @@ func resolvePlanFile(file planfile.File, repo string, prs []dependabot.PR) (plan
 		recordedBuckets[entry.Number] = entry.Bucket
 	}
 
-	res.plan = planner.BuildOrdered(selected, order)
-	for _, item := range res.plan.Items {
+	ordered := planner.BuildOrdered(selected, order)
+	for _, item := range ordered.Items {
 		was := recordedBuckets[item.PR.Number]
-		if was != "" && !strings.EqualFold(was, string(item.Bucket)) {
-			res.drifted = append(res.drifted, bucketDrift{number: item.PR.Number, was: was, now: item.Bucket})
+		if was == "" || strings.EqualFold(was, string(item.Bucket)) {
+			res.plan.Items = append(res.plan.Items, item)
+			continue
 		}
+		drift := bucketDrift{number: item.PR.Number, was: was, now: item.Bucket}
+		if item.Bucket == planner.BucketMajor {
+			res.blocked = append(res.blocked, drift)
+			continue
+		}
+		res.drifted = append(res.drifted, drift)
+		res.plan.Items = append(res.plan.Items, item)
 	}
 
 	listed := make(map[int]bool, len(file.Entries))
@@ -180,6 +196,9 @@ func writePlanFileNotices(w io.Writer, res planFileResolution, reportUnlisted bo
 	var builder strings.Builder
 	if len(res.dropped) > 0 {
 		fmt.Fprintf(&builder, "Not processed (not an open Dependabot PR): %s\n", formatPRNumbers(res.dropped))
+	}
+	for _, drift := range res.blocked {
+		fmt.Fprintf(&builder, "Not processed: #%d is now [major], was [%s] when planned; change its bucket to [major] in the plan file to include it\n", drift.number, sanitize(drift.was))
 	}
 	for _, drift := range res.drifted {
 		fmt.Fprintf(&builder, "Warning: #%d is now [%s], was [%s] when planned\n", drift.number, drift.now, sanitize(drift.was))
@@ -261,6 +280,9 @@ func parsePlanFilePath(path string) (file planfile.File, err error) {
 func planFromEditor(cmd *cobra.Command, deps commandDeps, opts *commandOptions, changeKinds []dependabot.ChangeKind, includeDrafts bool) (res planFileResolution, repo string, ok bool, err error) {
 	prs, err := discoverDependabotPRs(cmd.Context(), deps, opts)
 	if err != nil {
+		return planFileResolution{}, "", false, err
+	}
+	if err := warnUnmatchedEcosystems(cmd.ErrOrStderr(), prs, opts); err != nil {
 		return planFileResolution{}, "", false, err
 	}
 	if len(prs) == 0 {

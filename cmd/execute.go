@@ -11,6 +11,7 @@ import (
 	"github.com/JakeTRogers/depflow/internal/config"
 	"github.com/JakeTRogers/depflow/internal/dependabot"
 	"github.com/JakeTRogers/depflow/internal/executor"
+	"github.com/JakeTRogers/depflow/internal/githubcli"
 	"github.com/JakeTRogers/depflow/internal/planner"
 	"github.com/JakeTRogers/depflow/internal/progress"
 	"github.com/spf13/cobra"
@@ -27,6 +28,8 @@ type executeOptions struct {
 	checkTimeout     time.Duration
 	postMergeDelay   time.Duration
 	postMergeTimeout time.Duration
+	requirePostMerge bool
+	skipFailed       bool
 	showChecks       bool
 	showTiming       bool
 	edit             bool
@@ -35,13 +38,25 @@ type executeOptions struct {
 
 const minPollInterval = 5 * time.Second
 
+// checkRegistrationGrace is how long execute gives GitHub to register checks for a PR that
+// reports none, or whose branch was just updated, before trusting the reported check state.
+const checkRegistrationGrace = 30 * time.Second
+
+// postMergeRunGrace is how long execute waits for a merge commit to start any workflow run before
+// continuing with a warning; --require-post-merge-ci turns that into a failure instead.
+const postMergeRunGrace = 2 * time.Minute
+
 func newExecuteCommand(deps commandDeps, opts *commandOptions) *cobra.Command {
 	execOpts := &executeOptions{}
 
 	cmd := &cobra.Command{
 		Use:   "execute",
 		Short: "Process Dependabot PRs in planned order",
+		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if execOpts.edit && execOpts.planPath != "" {
+				return errors.New("--edit cannot be combined with --plan; edit the plan file directly, then run execute --plan")
+			}
 			if err := validateExecuteOptions(execOpts); err != nil {
 				return err
 			}
@@ -82,17 +97,22 @@ func newExecuteCommand(deps commandDeps, opts *commandOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if err := warnUnmatchedEcosystems(cmd.ErrOrStderr(), prs, opts); err != nil {
+				return err
+			}
 
 			filterOpts := buildFilterOptions(opts, changeKinds, execOpts.includeDrafts, true)
 			included, excluded := dependabot.Filter(prs, filterOpts)
-			included = applyLimit(included, opts)
+			plan, overLimit := limitPlan(planner.Build(included), opts)
 			if len(excluded) > 0 {
 				if err := writeExcludedPRs(cmd.OutOrStdout(), excludedPRsHeading, excluded); err != nil {
 					return err
 				}
 			}
+			if err := writeLimitNotice(cmd.OutOrStdout(), len(overLimit), opts); err != nil {
+				return err
+			}
 
-			plan := planner.Build(included)
 			if len(plan.Items) == 0 {
 				if len(excluded) > 0 {
 					if _, err := fmt.Fprintln(cmd.OutOrStdout()); err != nil {
@@ -109,7 +129,7 @@ func newExecuteCommand(deps commandDeps, opts *commandOptions) *cobra.Command {
 				return nil
 			}
 
-			if len(excluded) > 0 {
+			if len(excluded) > 0 || len(overLimit) > 0 {
 				if _, err := fmt.Fprintln(cmd.OutOrStdout()); err != nil {
 					return fmt.Errorf("writing execute output spacing: %w", err)
 				}
@@ -125,8 +145,7 @@ func newExecuteCommand(deps commandDeps, opts *commandOptions) *cobra.Command {
 		panic(err)
 	}
 	cmd.Flags().BoolVar(&execOpts.edit, "edit", false, "edit the plan in $VISUAL/$EDITOR before executing (reorder lines, pick or skip PRs)")
-	cmd.Flags().StringVar(&execOpts.planPath, "plan", "", "execute a plan file written by `depflow plan -o` (- reads stdin)")
-	cmd.MarkFlagsMutuallyExclusive("edit", "plan")
+	cmd.Flags().StringVar(&execOpts.planPath, "plan", "", "execute a plan `FILE` written by depflow plan -o (- reads stdin)")
 	cmd.Flags().StringSliceVar(&execOpts.changeKind, "change-kind", defaultChangeKindValues, "include only these change kinds: patch, minor, major, unknown, or all")
 	if err := cmd.RegisterFlagCompletionFunc("change-kind", changeKindCompletions); err != nil {
 		panic(err)
@@ -137,6 +156,8 @@ func newExecuteCommand(deps commandDeps, opts *commandOptions) *cobra.Command {
 	cmd.Flags().DurationVar(&execOpts.checkTimeout, "check-timeout", 30*time.Minute, "maximum wait for CI checks per PR")
 	cmd.Flags().DurationVar(&execOpts.postMergeDelay, "post-merge-delay", 10*time.Second, "delay before checking post-merge CI")
 	cmd.Flags().DurationVar(&execOpts.postMergeTimeout, "post-merge-timeout", 30*time.Minute, "maximum wait for post-merge CI")
+	cmd.Flags().BoolVar(&execOpts.requirePostMerge, "require-post-merge-ci", false, "fail if a merge commit starts no workflow runs instead of continuing with a warning")
+	cmd.Flags().BoolVar(&execOpts.skipFailed, "skip-failed", false, "set aside a PR whose checks fail or time out, or that conflicts or cannot be rebased, and continue with the rest")
 	cmd.Flags().BoolVar(&execOpts.showChecks, "show-checks", false, "show per-check pass/pending/fail detail while waiting")
 	cmd.Flags().BoolVar(&execOpts.showTiming, "show-timing", false, "show elapsed wait time and per-PR duration")
 
@@ -187,14 +208,18 @@ func runPlan(cmd *cobra.Command, deps commandDeps, opts *commandOptions, execOpt
 	}
 
 	cfg := executor.Config{
-		MergeMethod:      method.Value,
-		Admin:            execOpts.admin,
-		PollInterval:     execOpts.pollInterval,
-		CheckTimeout:     execOpts.checkTimeout,
-		PostMergeDelay:   execOpts.postMergeDelay,
-		PostMergeTimeout: execOpts.postMergeTimeout,
-		ShowChecks:       execOpts.showChecks,
-		ShowTiming:       execOpts.showTiming,
+		MergeMethod:        method.Value,
+		Admin:              execOpts.admin,
+		PollInterval:       execOpts.pollInterval,
+		CheckTimeout:       execOpts.checkTimeout,
+		CheckGrace:         checkRegistrationGrace,
+		PostMergeDelay:     execOpts.postMergeDelay,
+		PostMergeTimeout:   execOpts.postMergeTimeout,
+		PostMergeGrace:     postMergeRunGrace,
+		RequirePostMergeCI: execOpts.requirePostMerge,
+		ShowChecks:         execOpts.showChecks,
+		ShowTiming:         execOpts.showTiming,
+		SkipFailed:         execOpts.skipFailed,
 	}
 
 	ui := progress.NewTracker(cmd.ErrOrStderr(), len(plan.Items))
@@ -204,11 +229,17 @@ func runPlan(cmd *cobra.Command, deps commandDeps, opts *commandOptions, execOpt
 	result, err := executor.Run(cmd.Context(), deps.operator, plan, repo, cfg, log, ui)
 
 	ui.Stop()
-	if printErr := printResult(cmd.OutOrStdout(), result, execOpts.showTiming); printErr != nil {
+	resume, notAttempted := resumeItems(plan, result)
+	if printErr := printResult(cmd.OutOrStdout(), result, notAttempted, execOpts.showTiming); printErr != nil {
 		if err != nil {
 			return errors.Join(err, printErr)
 		}
 		return printErr
+	}
+	if err != nil && len(resume) > 0 && deps.resumeDir != "" {
+		if resumeErr := writeResumePlan(cmd, deps, resume, result, repo); resumeErr != nil {
+			return errors.Join(err, resumeErr)
+		}
 	}
 	return err
 }
@@ -253,6 +284,10 @@ func resolveRepo(ctx context.Context, deps commandDeps, repo string) (string, er
 	}
 
 	resolvedRepo, err := deps.resolver.ResolveRepo(ctx)
+	if errors.Is(err, githubcli.ErrAuthRequired) {
+		// --repo cannot help when gh is not logged in; gh's own message says how to log in.
+		return "", fmt.Errorf("resolving current repository: %w", err)
+	}
 	if err != nil {
 		return "", fmt.Errorf("resolving current repository: %w; %s", err, rerunWithRepoHint(""))
 	}
@@ -294,7 +329,7 @@ func printPlanOrder(w io.Writer, header string, plan planner.Plan) error {
 	return nil
 }
 
-func printResult(w io.Writer, result *executor.Result, showTiming bool) error {
+func printResult(w io.Writer, result *executor.Result, notAttempted []int, showTiming bool) error {
 	if result == nil {
 		return nil
 	}
@@ -324,12 +359,12 @@ func printResult(w io.Writer, result *executor.Result, showTiming bool) error {
 	}
 
 	merged := result.Merged()
-	failed := result.Failed()
+	failed := result.FailedPRs()
 	if _, err := fmt.Fprintf(w, "\nMerged: %d", len(merged)); err != nil {
 		return fmt.Errorf("writing execution summary totals: %w", err)
 	}
-	if failed != nil {
-		if _, err := fmt.Fprintf(w, "  Failed: #%d", failed.Item.PR.Number); err != nil {
+	if len(failed) > 0 {
+		if _, err := fmt.Fprintf(w, "  Failed: %s", formatPRNumbers(prResultNumbers(failed))); err != nil {
 			return fmt.Errorf("writing execution summary failed item: %w", err)
 		}
 	}
@@ -337,5 +372,5 @@ func printResult(w io.Writer, result *executor.Result, showTiming bool) error {
 		return fmt.Errorf("writing execution summary trailing newline: %w", err)
 	}
 
-	return nil
+	return writeNotAttempted(w, notAttempted)
 }

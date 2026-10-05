@@ -42,7 +42,7 @@ func TestWriteRendersPicksThenSkips(t *testing.T) {
 		"repo owner/repo\n",
 		"# depflow plan, generated 2026-09-27T14:03:00Z\n",
 		"\npick #31 [ci] Bump actions/checkout from 7.0.0 to 7.0.1\npick #22 [minor] Bump github.com/spf13/cobra from 1.9.0 to 1.10.2\n",
-		"# Excluded by default filters. Change \"skip\" to \"pick\" to include:\n",
+		"# Not included by default. Change \"skip\" to \"pick\" to include:\n",
 		"skip #40 [major] Bump foo from 1.4.0 to 2.0.0  # change-kind \"major\" not in --change-kind allow-list\n",
 	} {
 		if !strings.Contains(got, want) {
@@ -61,7 +61,7 @@ func TestWriteOmitsSkipSectionWhenNoSkips(t *testing.T) {
 	if err := Write(&out, "owner/repo", time.Now(), []planner.PlannedPR{plannedPR(1, planner.BucketPatch, "patch")}, nil); err != nil {
 		t.Fatalf("Write() error = %v", err)
 	}
-	if strings.Contains(out.String(), "Excluded by default filters") {
+	if strings.Contains(out.String(), "Not included by default") {
 		t.Fatalf("Write() output should not include skip section:\n%s", out.String())
 	}
 }

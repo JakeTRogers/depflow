@@ -246,7 +246,7 @@ func TestPrintDryRunAndResultSanitizeTitlesAndErrors(t *testing.T) {
 	}}}
 
 	var resultOutput bytes.Buffer
-	if err := printResult(&resultOutput, result, false); err != nil {
+	if err := printResult(&resultOutput, result, nil, false); err != nil {
 		t.Fatalf("printResult() error = %v", err)
 	}
 
@@ -272,7 +272,7 @@ func TestPrintResultShowTimingIncludesDuration(t *testing.T) {
 	}}}
 
 	var withTiming bytes.Buffer
-	if err := printResult(&withTiming, result, true); err != nil {
+	if err := printResult(&withTiming, result, nil, true); err != nil {
 		t.Fatalf("printResult() error = %v", err)
 	}
 	if !strings.Contains(withTiming.String(), "(1m30s)") {
@@ -280,7 +280,7 @@ func TestPrintResultShowTimingIncludesDuration(t *testing.T) {
 	}
 
 	var withoutTiming bytes.Buffer
-	if err := printResult(&withoutTiming, result, false); err != nil {
+	if err := printResult(&withoutTiming, result, nil, false); err != nil {
 		t.Fatalf("printResult() error = %v", err)
 	}
 	if strings.Contains(withoutTiming.String(), "1m30s") {

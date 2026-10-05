@@ -1,3 +1,27 @@
+## v2.3.0 (2026-10-04)
+
+### Feat
+
+- **execute**: add --skip-failed to continue past PR-specific failures
+- mark PRs that fix open Dependabot security alerts
+- **execute**: write a resume plan when execution stops early
+- **filter**: accept dependabot.yml ecosystem names and warn on typos
+
+### Fix
+
+- **cmd**: tighten argument validation and gh error messages
+- **cmd**: show FILE placeholders in plan and execute help
+- **plan**: refuse to overwrite an existing plan file
+- **dependabot**: read only the update list in grouped PR bodies
+- **dependabot**: match risk keywords on whole name segments
+- **executor**: handle merge commits that start no post-merge CI
+- **cmd**: apply --limit in processing order
+- **planfile**: hold back picks that became major since planning
+- **dependabot**: stop treating commit SHAs as semantic versions
+- **dependabot**: parse titles with repeated commit scopes
+- **dependabot**: classify requirement-range version updates
+- **executor**: pin merges to the CI-verified head commit
+
 ## v2.2.1 (2026-09-29)
 
 ### Fix

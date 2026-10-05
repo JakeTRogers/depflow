@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"strings"
 	"text/tabwriter"
@@ -20,6 +21,7 @@ type planOptions struct {
 	includeDrafts bool
 	details       bool
 	output        string
+	force         bool
 }
 
 func newPlanCommand(deps commandDeps, opts *commandOptions) *cobra.Command {
@@ -28,7 +30,14 @@ func newPlanCommand(deps commandDeps, opts *commandOptions) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "plan",
 		Short: "Show the deterministic Dependabot processing order",
+		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if planOpts.details && planOpts.output != "" {
+				return errors.New("--details cannot be combined with --output; --output writes a plan file instead of the listing")
+			}
+			if planOpts.force && (planOpts.output == "" || planOpts.output == "-") {
+				return errors.New("--force only applies when writing a plan file with --output FILE")
+			}
 			changeKinds, err := parseChangeKinds(planOpts.changeKind)
 			if err != nil {
 				return err
@@ -38,6 +47,9 @@ func newPlanCommand(deps commandDeps, opts *commandOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if err := warnUnmatchedEcosystems(cmd.ErrOrStderr(), prs, opts); err != nil {
+				return err
+			}
 
 			if planOpts.output != "" {
 				return writePlanFile(cmd, deps, opts, prs, changeKinds, planOpts)
@@ -45,8 +57,7 @@ func newPlanCommand(deps commandDeps, opts *commandOptions) *cobra.Command {
 
 			filterOpts := buildFilterOptions(opts, changeKinds, planOpts.includeDrafts, true)
 			included, excluded := dependabot.Filter(prs, filterOpts)
-			included = applyLimit(included, opts)
-			plan := planner.Build(included)
+			plan, overLimit := limitPlan(planner.Build(included), opts)
 			if len(plan.Items) == 0 && len(excluded) == 0 {
 				if _, err := fmt.Fprintln(cmd.OutOrStdout(), noOpenDependabotPRsMessage); err != nil {
 					return fmt.Errorf("writing plan output: %w", err)
@@ -73,7 +84,12 @@ func newPlanCommand(deps commandDeps, opts *commandOptions) *cobra.Command {
 				}
 			}
 
-			return nil
+			if len(overLimit) > 0 {
+				if _, err := fmt.Fprintln(cmd.OutOrStdout()); err != nil {
+					return fmt.Errorf("writing plan output spacing: %w", err)
+				}
+			}
+			return writeLimitNotice(cmd.OutOrStdout(), len(overLimit), opts)
 		},
 	}
 
@@ -83,8 +99,8 @@ func newPlanCommand(deps commandDeps, opts *commandOptions) *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&planOpts.includeDrafts, "include-drafts", false, "include draft Dependabot PRs in planning")
 	cmd.Flags().BoolVar(&planOpts.details, "details", false, "show full titles, classification signals, reasons, and URLs instead of the compact table")
-	cmd.Flags().StringVarP(&planOpts.output, "output", "o", "", "write an editable plan file for `depflow execute --plan` (- for stdout)")
-	cmd.MarkFlagsMutuallyExclusive("details", "output")
+	cmd.Flags().StringVarP(&planOpts.output, "output", "o", "", "write an editable plan `FILE` for depflow execute --plan (- for stdout)")
+	cmd.Flags().BoolVar(&planOpts.force, "force", false, "overwrite an existing --output file")
 
 	return cmd
 }
@@ -110,17 +126,35 @@ func writeCompactPlan(writer io.Writer, plan planner.Plan) error {
 	if len(plan.Items) == 0 {
 		return nil
 	}
+	// The SECURITY column appears only when it has something to show.
+	showSecurity := false
+	for _, item := range plan.Items {
+		showSecurity = showSecurity || item.PR.Classification.Security.Update
+	}
+
 	var builder strings.Builder
-	builder.WriteString("ORDER\tPR\tBUCKET\tECOSYSTEM\tDEPENDENCY\tCHANGE\n")
+	builder.WriteString("ORDER\tPR\tBUCKET\tECOSYSTEM\tDEPENDENCY\tCHANGE")
+	if showSecurity {
+		builder.WriteString("\tSECURITY")
+	}
+	builder.WriteString("\n")
 	for index, item := range plan.Items {
 		classification := item.PR.Classification
 		dependency := classification.DependencyName
 		if strings.TrimSpace(dependency) == "" {
 			dependency = item.PR.Title
 		}
-		fmt.Fprintf(&builder, "%d\t#%d\t%s\t%s\t%s\t%s\n", index+1, item.PR.Number,
+		fmt.Fprintf(&builder, "%d\t#%d\t%s\t%s\t%s\t%s", index+1, item.PR.Number,
 			planCell(string(item.Bucket)), planCell(classification.Ecosystem),
 			planCell(dependency), planCell(string(classification.EffectiveChangeKind())))
+		if showSecurity {
+			security := "-"
+			if classification.Security.Update {
+				security = securityLabel(classification.Security)
+			}
+			builder.WriteString("\t" + security)
+		}
+		builder.WriteString("\n")
 	}
 	table := tabwriter.NewWriter(writer, 0, 4, 2, ' ', 0)
 	if _, err := io.WriteString(table, builder.String()); err != nil {
@@ -149,12 +183,13 @@ func writePlannedPR(writer io.Writer, index int, item planner.PlannedPR) error {
 
 	var builder strings.Builder
 	fmt.Fprintf(&builder, "%d. #%d [%s] %s\n", index, item.PR.Number, item.Bucket, title)
-	fmt.Fprintf(&builder, "   signals: ecosystem=%s change=%s grouped=%s dev-tooling=%s infra-sensitive=%s\n",
+	fmt.Fprintf(&builder, "   signals: ecosystem=%s change=%s grouped=%s dev-tooling=%s infra-sensitive=%s security=%s\n",
 		displayOrUnknown(classification.Ecosystem),
 		classification.EffectiveChangeKind(),
 		yesNo(classification.Grouped),
 		yesNo(classification.DeveloperTooling),
-		yesNo(classification.InfrastructureSensitive))
+		yesNo(classification.InfrastructureSensitive),
+		securityLabel(classification.Security))
 	if dependencyName != "" {
 		fmt.Fprintf(&builder, "   dependency: %s\n", dependencyName)
 	}
@@ -194,7 +229,16 @@ func writePlanFile(cmd *cobra.Command, deps commandDeps, opts *commandOptions, p
 		return planfile.Write(cmd.OutOrStdout(), repo, time.Now(), contents.picks, contents.skips)
 	}
 
-	file, err := os.Create(planOpts.output)
+	// O_EXCL refuses an existing file in the same step that creates it, so a hand-edited plan is
+	// never replaced unless --force asks for that.
+	flags := os.O_WRONLY | os.O_CREATE | os.O_EXCL
+	if planOpts.force {
+		flags = os.O_WRONLY | os.O_CREATE | os.O_TRUNC
+	}
+	file, err := os.OpenFile(planOpts.output, flags, 0o644)
+	if errors.Is(err, fs.ErrExist) {
+		return fmt.Errorf("plan file %s already exists; pass --force to overwrite it", planOpts.output)
+	}
 	if err != nil {
 		return fmt.Errorf("creating plan file: %w", err)
 	}

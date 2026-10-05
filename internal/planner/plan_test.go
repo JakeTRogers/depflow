@@ -90,6 +90,8 @@ func TestBuildReasonBranches(t *testing.T) {
 		{name: "grouped major fallback", classification: dependabot.Classification{Grouped: true, ContainsMajorUpdate: true}, bucket: BucketMajor, wantContains: "contains at least one major version bump"},
 		{name: "infra", classification: dependabot.Classification{InfraSensitiveKeywords: []string{"docker"}}, bucket: BucketInfraSensitive, wantContains: "docker"},
 		{name: "unknown", classification: dependabot.Classification{}, bucket: BucketUnknown, wantContains: "conservative unknown bucket"},
+		{name: "commit update", classification: dependabot.Classification{PreviousVersion: "08eba0b27e820071cde6df949e0beb9ba4906955", NextVersion: "34e1148"}, bucket: BucketUnknown, wantContains: "commit update from 08eba0b to 34e1148"},
+		{name: "mixed commit update keeps version", classification: dependabot.Classification{PreviousVersion: "v1.2.3-beta.1", NextVersion: "34e1148"}, bucket: BucketUnknown, wantContains: "from v1.2.3-beta.1 to 34e1148"},
 		{name: "dev", classification: dependabot.Classification{DevToolingKeywords: []string{"golangci-lint"}}, bucket: BucketDevTooling, wantContains: "golangci-lint"},
 	}
 
@@ -216,4 +218,41 @@ func planNumbers(plan Plan) []int {
 	}
 
 	return numbers
+}
+
+func TestBuildOrdersSecurityUpdatesFirstWithinBucket(t *testing.T) {
+	t.Parallel()
+
+	patch := func(number int, dependency string, security dependabot.SecurityStatus) dependabot.PR {
+		return dependabot.PR{Number: number, Title: "Bump " + dependency, Classification: dependabot.Classification{
+			Ecosystem: "npm-and-yarn", DependencyName: dependency, PreviousVersion: "1.0.0", NextVersion: "1.0.1",
+			ChangeKind: dependabot.ChangePatch, Security: security,
+		}}
+	}
+	minor := dependabot.PR{Number: 9, Title: "Bump zz", Classification: dependabot.Classification{
+		DependencyName: "zz", PreviousVersion: "1.0.0", NextVersion: "1.1.0", ChangeKind: dependabot.ChangeMinor,
+		Security: dependabot.SecurityStatus{Checked: true, Update: true, Severity: "critical"},
+	}}
+
+	plan := Build([]dependabot.PR{
+		patch(1, "aaa", dependabot.SecurityStatus{Checked: true}),
+		patch(2, "bbb", dependabot.SecurityStatus{Checked: true, Update: true, Severity: "low"}),
+		patch(3, "ccc", dependabot.SecurityStatus{Checked: true, Update: true, Severity: "high"}),
+		minor,
+	})
+
+	var order []int
+	for _, item := range plan.Items {
+		order = append(order, item.PR.Number)
+	}
+	// Security sorts within a bucket only: the critical minor update stays after every patch.
+	if !reflect.DeepEqual(order, []int{3, 2, 1, 9}) {
+		t.Fatalf("order = %v, want [3 2 1 9]", order)
+	}
+	if !strings.HasSuffix(plan.Items[0].Reason, "; fixes a high-severity Dependabot alert") {
+		t.Fatalf("reason = %q, want security suffix", plan.Items[0].Reason)
+	}
+	if strings.Contains(plan.Items[2].Reason, "Dependabot alert") {
+		t.Fatalf("non-security reason = %q", plan.Items[2].Reason)
+	}
 }
