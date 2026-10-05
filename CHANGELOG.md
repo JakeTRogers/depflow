@@ -1,3 +1,10 @@
+## v2.3.1 (2026-10-04)
+
+### Fix
+
+- **deps**: bump github.com/go-viper/mapstructure/v2 from 2.4.0 to 2.5.0
+- **deps**: bump github.com/vbauerster/mpb/v8 from 8.16.0 to 8.16.1
+
 ## v2.3.0 (2026-10-04)
 
 ### Feat
