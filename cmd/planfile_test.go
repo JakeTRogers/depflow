@@ -147,7 +147,6 @@ func TestPlanOutputOmitsPRsExcludedByTypedFilters(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -223,7 +222,6 @@ func TestPlanOutputReportsEmptyResultsOnStderr(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -431,7 +429,6 @@ func TestExecutePlanFileNothingToDo(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -534,7 +531,6 @@ func TestExecutePlanFileErrors(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -632,7 +628,6 @@ func TestExecuteEditSkipsEditorWhenNothingToEdit(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -804,7 +799,7 @@ func TestTerminalEditorRunsEditorOnPath(t *testing.T) {
 
 func dryRunNumbers(stdout string) []string {
 	var numbers []string
-	for _, line := range strings.Split(stdout, "\n") {
+	for line := range strings.SplitSeq(stdout, "\n") {
 		fields := strings.Fields(line)
 		if len(fields) >= 2 && strings.HasSuffix(fields[0], ".") && strings.HasPrefix(fields[1], "#") {
 			numbers = append(numbers, fields[1])

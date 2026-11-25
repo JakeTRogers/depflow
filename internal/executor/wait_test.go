@@ -71,7 +71,6 @@ func TestWaitForChecks(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			ctx := context.Background()
@@ -99,7 +98,6 @@ func TestWaitForChecksTerminalFailureConclusionsReturnErrCheckFailed(t *testing.
 	t.Parallel()
 
 	for _, conclusion := range []string{"failure", "cancelled", "timed_out", "action_required", "startup_failure", "stale"} {
-		conclusion := conclusion
 		t.Run(conclusion, func(t *testing.T) {
 			t.Parallel()
 
@@ -420,7 +418,6 @@ func TestWaitForPostMergeCI(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			ctx := context.Background()
@@ -449,7 +446,6 @@ func TestWaitForPostMergeCITerminalFailureConclusions(t *testing.T) {
 	t.Parallel()
 
 	for _, conclusion := range []string{"failure", "cancelled", "timed_out", "action_required", "startup_failure", "stale"} {
-		conclusion := conclusion
 		t.Run(conclusion, func(t *testing.T) {
 			t.Parallel()
 

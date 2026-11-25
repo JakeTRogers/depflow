@@ -50,8 +50,7 @@ func TestReadMergeCapabilities(t *testing.T) {
 		}
 		if !test.fail {
 			err := caps.Require("merge")
-			var conflict *MethodNotAllowedError
-			if !errors.As(err, &conflict) {
+			if _, ok := errors.AsType[*MethodNotAllowedError](err); !ok {
 				t.Fatalf("Require: %v", err)
 			}
 		}

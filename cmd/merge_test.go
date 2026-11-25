@@ -222,7 +222,7 @@ func TestMergeCompletion(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			operator := &completionOperator{fakeExecuteOperator: fakeExecuteOperator{capabilities: &githubcli.MergeCapabilities{Methods: test.methods}}, wait: test.wait}
+			operator := &completionOperator{capabilities: &githubcli.MergeCapabilities{Methods: test.methods}, wait: test.wait}
 			if test.fail {
 				operator.capabilityErr = errors.New("offline")
 			}
@@ -231,7 +231,7 @@ func TestMergeCompletion(t *testing.T) {
 				t.Fatalf("%+v repo=%s", run, operator.repo)
 			}
 			var names []string
-			for _, line := range strings.Split(run.stdout, "\n") {
+			for line := range strings.SplitSeq(run.stdout, "\n") {
 				if strings.Contains(line, "\t") {
 					names = append(names, strings.SplitN(line, "\t", 2)[0])
 				}
