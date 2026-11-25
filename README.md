@@ -34,15 +34,15 @@ Lists open Dependabot pull requests with metadata including classification signa
 
 depflow reads the repository's open Dependabot alerts once per run and marks a PR as a security update when it updates a package with an open alert: the dependency in its title, or any package in a grouped update's list. Package names match case-insensitively (Python names per PEP 503), and the alert's ecosystem must agree with the PR's. Alerts are not matched by manifest directory, so in a monorepo an update in one directory can match an alert raised for another.
 
-The signal appears as `security=<severity>`, `security=no`, or `security=unknown` in `scan` and `plan --details`. The compact plan table adds a `SECURITY` column when any listed PR is a security update, and plan files note `# security: <severity>` on those lines. Within each bucket, security updates are processed first, most severe first; they do not move ahead of lower-risk buckets.
+The signal appears as `security=<severity>`, `security=no`, or `security=unknown` in `scan` and `plan --details`. The compact plan table adds a `SECURITY` column when any listed PR is a security update, and plan files note `# security: <severity>` on those lines. Within each bucket, security updates are processed first, most severe first; they do not move ahead of earlier buckets.
 
 Reading alerts requires access to them (repository admins and users granted security-alert access; fine-grained tokens need the Dependabot alerts read permission). Without it, every PR shows `security=unknown` and nothing else changes, except that `--security-only` fails rather than guessing.
 
-Developer-tooling and infrastructure-sensitive hints use keywords from the dependency name parsed from the PR title, or the lead dependency of a grouped update. Keywords match whole name segments split on punctuation, so `@aws-sdk/client-s3` matches `aws` but `drawsvg` does not. Project paths, labels, group names, and other title text do not set these hints. When the name can only be inferred from a branch, it is still displayed but does not contribute risk hints. These are keyword heuristics, not a complete assessment of dependency risk, and apply to `scan`, `plan`, and `execute` alike.
+Developer-tooling and infrastructure-sensitive hints use keywords from the dependency name parsed from the PR title, or the lead dependency of a grouped update. Keywords match whole name segments split on punctuation, so `@aws-sdk/client-s3` matches `aws` but `drawsvg` does not. Project paths, labels, group names, and other title text do not set these hints. When the name can only be inferred from a branch, it is still displayed but does not contribute keyword hints. These are keyword heuristics, not a complete assessment of dependency risk, and apply to `scan`, `plan`, and `execute` alike.
 
 ### plan
 
-Shows deterministic classification and the preferred processing order. By default, `plan` excludes major version updates and drafts from the planned queue and lists them separately under `Excluded by filters` along with the reason each was excluded. Grouped summary PRs are also treated as major when the update list in their PR body (Dependabot's `Updates ... from A to B` lines and `Package | From | To` table) contains a major version bump; versions mentioned in bundled release notes and changelogs are ignored. Included PRs are sorted into buckets — ci, developer-tooling, patch, minor, grouped, unknown, infra-sensitive, major — so that lower-risk updates are processed first.
+Shows deterministic classification and the preferred processing order. By default, `plan` excludes major version updates and drafts from the planned queue and lists them separately under `Excluded by filters` along with the reason each was excluded. Grouped updates are also treated as major when the update list in their PR body (Dependabot's `Updates ... from A to B` lines and `Package | From | To` table) contains a major version bump; versions mentioned in bundled release notes and changelogs are ignored. Included PRs are sorted into buckets — ci, developer-tooling, patch, minor, grouped, unknown, infra-sensitive, major. CI and developer-tooling updates go first so every later PR is validated against the updated pipeline; the remaining buckets run from lowest to highest risk. Risk outranks sequencing: a major, infra-sensitive, or grouped PR goes to the riskiest of those buckets even when it is also a CI or developer-tooling update, so a major GitHub Actions update is in `major`, not `ci`.
 
 The default listing is a compact table with execution order, PR number, bucket, ecosystem, dependency, and change kind, plus a security column when any listed PR is a [security update](#security-updates). Every PR has its own row in processing order. Missing values appear as `unknown`; when no dependency name is available, the title is shown instead. Long identifiers are preserved rather than truncated.
 
@@ -231,7 +231,7 @@ depflow 0.1.0 (linux/amd64)
 
 ## Prerequisites
 
-- Go 1.25+
+- Go 1.27+
 - [GitHub CLI](https://cli.github.com/) (`gh`) installed and authenticated with permission to review and merge pull requests; fine-grained tokens need pull-request write access in addition to workflow visibility
 
 `scan`, `plan`, and `execute` all use `gh` as the GitHub transport.

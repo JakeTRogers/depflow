@@ -36,4 +36,17 @@ Go CLI that discovers open Dependabot pull requests, plans a deterministic proce
 - Releases: pushing a `v*` tag runs GoReleaser; `README.md` ships inside the release archives, so keep it end-user-facing.
 - Before running live `gh` commands in a shell, run `gh config set pager cat` to avoid interactive pager hangs (depflow's own wrapper already sets `GH_PAGER=""`).
 - Anything printed from GitHub-derived data must pass through `internal/terminal` sanitization first.
-- `.github/copilot-instructions.md` predates v2.0.0 and still documents the removed `--include-major`/`-M` flag and `planner.PartitionMajor()`; trust `README.md` and the code for the current `--change-kind` filter surface.
+
+## Agent skills
+
+### Issue tracker
+
+Issues are tracked in GitHub Issues for JakeTRogers/depflow via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default five-role vocabulary: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: root `GLOSSARY.md` + `docs/adr/`. See `docs/agents/domain.md`.

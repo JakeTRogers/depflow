@@ -1,3 +1,15 @@
+## v2.3.2 (2026-11-25)
+
+### Fix
+
+- **deps**: bump github.com/vbauerster/mpb/v8 from 8.16.1 to 8.16.3 (#33)
+- **deps**: bump go.yaml.in/yaml/v3 from 3.0.5 to 3.0.6 (#34)
+
+### Refactor
+
+- adopt modern Go idioms after the 1.27 upgrade
+- **agents**: remove CLAUDE.md pointer to AGENTS.md
+
 ## v2.3.1 (2026-10-04)
 
 ### Fix

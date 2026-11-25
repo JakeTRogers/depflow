@@ -1,6 +1,6 @@
 module github.com/JakeTRogers/depflow
 
-go 1.26.0
+go 1.27
 
 require (
 	github.com/go-viper/mapstructure/v2 v2.5.0

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -482,7 +483,6 @@ func TestRun(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -810,25 +810,13 @@ func TestRunProgressUpdates(t *testing.T) {
 	}
 
 	// Verify that skipped PR #10 still produced a status update
-	foundSkipped := false
-	for _, s := range spy.statuses {
-		if s == "Skipped PR #10" {
-			foundSkipped = true
-			break
-		}
-	}
+	foundSkipped := slices.Contains(spy.statuses, "Skipped PR #10")
 	if !foundSkipped {
 		t.Errorf("expected 'Skipped PR #10' status, got: %v", spy.statuses)
 	}
 
 	// Verify that merged PR #20 produced a merge status
-	foundMerged := false
-	for _, s := range spy.statuses {
-		if s == "Merged PR #20" {
-			foundMerged = true
-			break
-		}
-	}
+	foundMerged := slices.Contains(spy.statuses, "Merged PR #20")
 	if !foundMerged {
 		t.Errorf("expected 'Merged PR #20' status, got: %v", spy.statuses)
 	}

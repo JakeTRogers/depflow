@@ -2,6 +2,7 @@ package dependabot
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -88,12 +89,7 @@ func exclusionReason(pr PR, opts FilterOptions) (string, bool) {
 }
 
 func containsChangeKind(kinds []ChangeKind, kind ChangeKind) bool {
-	for _, k := range kinds {
-		if k == kind {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(kinds, kind)
 }
 
 // ecosystemAliases maps dependabot.yml package-ecosystem names to the names Dependabot uses in

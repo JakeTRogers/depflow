@@ -73,12 +73,13 @@ func prepareMerge(cmd *cobra.Command, deps commandDeps, opts *commandOptions, ex
 	}
 	for _, item := range plan.Items {
 		if err := deps.operator.CheckMergeAllowed(cmd.Context(), repo, item.PR.Number, method.Value); err != nil {
-			var conflict *githubcli.MethodNotAllowedError
-			if execOpts.dryRun && !errors.As(err, &conflict) && !errors.Is(err, githubcli.ErrMergeQueueUnsupported) && !errors.Is(err, context.Canceled) {
-				if err := printLine(cmd.ErrOrStderr(), "Warning: merge policy unverified: "+sanitize(err.Error())); err != nil {
-					return method, repo, err
+			if execOpts.dryRun {
+				if _, isMethodNotAllowed := errors.AsType[*githubcli.MethodNotAllowedError](err); !isMethodNotAllowed && !errors.Is(err, githubcli.ErrMergeQueueUnsupported) && !errors.Is(err, context.Canceled) {
+					if err := printLine(cmd.ErrOrStderr(), "Warning: merge policy unverified: "+sanitize(err.Error())); err != nil {
+						return method, repo, err
+					}
+					continue
 				}
-				continue
 			}
 			return method, repo, mergePreflightError(method, err)
 		}
@@ -87,8 +88,7 @@ func prepareMerge(cmd *cobra.Command, deps commandDeps, opts *commandOptions, ex
 }
 
 func mergePreflightError(method config.Value, err error) error {
-	var conflict *githubcli.MethodNotAllowedError
-	if errors.As(err, &conflict) && len(conflict.Capabilities.Methods) > 0 {
+	if conflict, ok := errors.AsType[*githubcli.MethodNotAllowedError](err); ok && len(conflict.Capabilities.Methods) > 0 {
 		return fmt.Errorf("%s: %w; no pull requests were modified; rerun the same command with --merge-method %s, preserving its filters and plan arguments", method.Source, err, conflict.Capabilities.Methods[0])
 	}
 	return fmt.Errorf("%s: %w; no pull requests were modified", method.Source, err)

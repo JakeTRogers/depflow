@@ -161,13 +161,7 @@ func writeLimitNotice(writer io.Writer, cut int, opts *commandOptions) error {
 }
 
 func listOpenPullRequestsForDiscovery(ctx context.Context, deps commandDeps, opts *commandOptions) ([]githubcli.PullRequest, error) {
-	requestLimit := opts.limit
-	if requestLimit < defaultPullRequestLimit {
-		requestLimit = defaultPullRequestLimit
-	}
-	if requestLimit > maxDiscoveryPullRequestLimit {
-		requestLimit = maxDiscoveryPullRequestLimit
-	}
+	requestLimit := min(max(opts.limit, defaultPullRequestLimit), maxDiscoveryPullRequestLimit)
 
 	previousCount := -1
 	for {

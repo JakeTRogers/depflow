@@ -190,8 +190,7 @@ func TestGHExecutorRunReportsGHMessageAndAuthFailures(t *testing.T) {
 		if got := errors.Is(err, ErrAuthRequired); got != test.wantAuth {
 			t.Fatalf("%s: errors.Is(err, ErrAuthRequired) = %v, want %v", test.name, got, test.wantAuth)
 		}
-		var exitErr *exec.ExitError
-		if !errors.As(err, &exitErr) {
+		if _, ok := errors.AsType[*exec.ExitError](err); !ok {
 			t.Fatalf("%s: error does not wrap *exec.ExitError: %v", test.name, err)
 		}
 	}
