@@ -231,7 +231,7 @@ depflow 0.1.0 (linux/amd64)
 
 ## Prerequisites
 
-- Go 1.25+
+- Go 1.27+
 - [GitHub CLI](https://cli.github.com/) (`gh`) installed and authenticated with permission to review and merge pull requests; fine-grained tokens need pull-request write access in addition to workflow visibility
 
 `scan`, `plan`, and `execute` all use `gh` as the GitHub transport.
