@@ -4,11 +4,12 @@
         "dockerfile": "Dockerfile"
     },
     "mounts": [
-        "source=${localEnv:HOME}/.agents/skills,target=/home/vscode/.agents/skills,type=bind",
+        "source=devcntr-${localWorkspaceFolderBasename}-home,target=/home/vscode,type=volume",
         "source=${localEnv:HOME}/.config/gh,target=/home/vscode/.config/gh,type=bind",
+        "source=${localEnv:HOME}/.claude,target=/home/vscode/.claude,type=bind",
         "source=${localEnv:HOME}/.copilot,target=/home/vscode/.copilot,type=bind"
     ],
-    "initializeCommand": "mkdir -p \"${localEnv:HOME}/.agents/skills\" \"${localEnv:HOME}/.config/gh\" \"${localEnv:HOME}/.copilot\"",
+    "initializeCommand": "mkdir -p \"${localEnv:HOME}/.config/gh\" \"${localEnv:HOME}/.claude\" \"${localEnv:HOME}/.copilot\"",
     "customizations": {
         "vscode": {
             "settings": {
@@ -19,6 +20,7 @@
             },
             "extensions": [
                 "aaron-bond.better-comments",
+                "anthropic.claude-code",
                 "bierner.markdown-checkbox",
                 "bierner.markdown-emoji",
                 "bierner.markdown-footnotes",
