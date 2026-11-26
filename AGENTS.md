@@ -31,7 +31,7 @@ Go CLI that discovers open Dependabot pull requests, plans a deterministic proce
 
 ## Gotchas
 
-- Every PR must bump the `version` string in `cmd/version.go` — the `verBumpChkr` CI workflow fails otherwise (exempt only when the PR title starts with `ci(actions):`).
+- The `verBumpChkr` workflow applies Commitizen's bump rules to unreleased commits and checks version-file consistency when a bump is required; PR titles starting with `ci(actions):` are exempt.
 - Pre-commit rejects commits when total test coverage drops below 80%.
 - Releases: pushing a `v*` tag runs GoReleaser; `README.md` ships inside the release archives, so keep it end-user-facing.
 - Before running live `gh` commands in a shell, run `gh config set pager cat` to avoid interactive pager hangs (depflow's own wrapper already sets `GH_PAGER=""`).
